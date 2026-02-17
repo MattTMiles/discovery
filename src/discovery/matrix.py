@@ -1099,31 +1099,199 @@ class WoodburyKernel_varFP(VariableKernel):
         return kernelproduct
 
     def make_kernelproduct(self, y):
-        if callable(y):
-            return self.make_kernelproduct_vary(y)
+        N_solve_1d = self.N.make_solve_1d()
+        N_solve_2d = self.N.make_solve_2d()
+        P_var_inv  = self.P_var.make_inv()
+        Ffunc      = self.F
 
-        Nmy, _  = self.N.solve_1d(y)
-        ytNmy = y @ Nmy
-
-        y, ytNmy = jnparray(y), jnparray(ytNmy)
-        F_var, N_solve_2d = self.F, self.N.make_solve_2d()
-        P_var_inv = self.P_var.make_inv()
+        y_is_callable = callable(y)
+        if not y_is_callable:
+            y = jnparray(y)
+            Nmy, ldN_fixed = N_solve_1d(y)
+            ytNmy_fixed = y @ Nmy
+        else:
+            ytNmy_fixed = None
+            ldN_fixed = None
 
         def kernelproduct(params):
-            F = F_var(params)
-            NmF, ldN = N_solve_2d(F)
+            F = Ffunc(params)
+            NmF, ldN_here = N_solve_2d(F)
             FtNmF = F.T @ NmF
-            NmFty = NmF.T @ y
+
+            if y_is_callable:
+                yp = y(params)
+                Nmy, _ = N_solve_1d(yp) if yp.ndim == 1 else N_solve_2d(yp)
+                ytNmy = yp @ Nmy
+                NmFty = NmF.T @ yp
+                ldN = ldN_here
+            else:
+                ytNmy = ytNmy_fixed
+                NmFty = NmF.T @ y
+                ldN = ldN_fixed
 
             Pinv, ldP = P_var_inv(params)
             cf = matrix_factor(Pinv + FtNmF)
-            ytXy = NmFty.T @ matrix_solve(cf, NmFty)
+            sol = matrix_solve(cf, NmFty)
+            ytXy = NmFty.T @ sol
 
-            return -0.5 * (ytNmy - ytXy) - 0.5 * (ldN + ldP + matrix_norm * jnp.logdet(jnp.diag(cf[0])))
+            L = cf[0]
+            logdet_S = matrix_norm * jnp.logdet(jnp.diag(L))
 
-        kernelproduct.params = sorted(F_var.params + P_var_inv.params)
+            ldP_total = 0.0 if ldP is None else jnp.sum(jnp.asarray(ldP))
+            return -0.5 * (ytNmy - ytXy) - 0.5 * (ldN + ldP_total + logdet_S)
 
+        pset = set()
+        pset.update(getattr(Ffunc, 'params', []) or [])
+        pset.update(getattr(P_var_inv, 'params', []) or [])
+        if y_is_callable:
+            pset.update(getattr(y, 'params', []) or [])
+        kernelproduct.params = sorted(pset)
         return kernelproduct
+
+    def make_kernelsolve(self, y, T):
+        N_solve_1d = self.N.make_solve_1d()
+        N_solve_2d = self.N.make_solve_2d()
+        P_var_inv  = self.P_var.make_inv()
+        Ffunc      = self.F
+
+        y_is_callable = callable(y)
+        T_is_callable = callable(T)
+
+        if not y_is_callable:
+            y = jnparray(y)
+            Nmy_fixed, _ = N_solve_1d(y) if y.ndim == 1 else N_solve_2d(y)
+        else:
+            Nmy_fixed = None
+
+        if not T_is_callable:
+            T = jnparray(T)
+            NmT_const, _ = N_solve_2d(T)
+            TtNmT_const  = T.T @ NmT_const
+        else:
+            NmT_const = TtNmT_const = None
+
+        def kernelsolve(params):
+            F = Ffunc(params)
+
+            NmF, _  = N_solve_2d(F)
+            FtNmF   = F.T @ NmF
+
+            if T_is_callable:
+                Tmat   = T(params)
+                NmT, _ = N_solve_2d(Tmat)
+                FtNmT  = F.T @ NmT
+                TtNmT  = Tmat.T @ NmT
+                TtNmF  = Tmat.T @ NmF
+            else:
+                NmT   = NmT_const
+                FtNmT = F.T @ NmT
+                TtNmT = TtNmT_const
+                TtNmF = T.T @ NmF
+
+            if y_is_callable:
+                yp     = y(params)
+                Nmy, _ = N_solve_1d(yp) if yp.ndim == 1 else N_solve_2d(yp)
+                FtNmy  = F.T @ Nmy
+                TtNmy  = (T(params).T @ Nmy) if T_is_callable else (T.T @ Nmy)
+            else:
+                FtNmy  = NmF.T @ y
+                TtNmy  = (T(params).T @ Nmy_fixed) if T_is_callable else (T.T @ Nmy_fixed)
+
+            Pinv, _ = P_var_inv(params)
+            cf      = matrix_factor(Pinv + FtNmF)
+
+            TtSy = TtNmy - TtNmF @ matrix_solve(cf, FtNmy)
+            TtST = TtNmT - TtNmF @ matrix_solve(cf, FtNmT)
+            return TtSy, TtST
+
+        pset = set()
+        pset.update(getattr(P_var_inv, 'params', []) or [])
+        pset.update(getattr(self.F, 'params', []) or [])
+        if y_is_callable:
+            pset.update(getattr(y, 'params', []) or [])
+        if T_is_callable:
+            pset.update(getattr(T, 'params', []) or [])
+        kernelsolve.params = sorted(pset)
+        return kernelsolve
+
+    def make_kernelterms(self, y, T):
+        N_solve_1d = self.N.make_solve_1d()
+        N_solve_2d = self.N.make_solve_2d()
+        P_var_inv  = self.P_var.make_inv()
+        Ffunc      = self.F
+
+        y_is_callable = callable(y)
+        T_is_callable = callable(T)
+
+        if not y_is_callable:
+            y = jnparray(y)
+            Nmy_fixed, ldN_fixed = N_solve_1d(y)
+            ytNmy_fixed = y @ Nmy_fixed
+        else:
+            ytNmy_fixed = None
+            ldN_fixed = None
+
+        if not T_is_callable:
+            T = jnparray(T)
+            NmT_const, _ = N_solve_2d(T)
+            TtNmT_const  = T.T @ NmT_const
+        else:
+            NmT_const = TtNmT_const = None
+
+        def kernelterms(params):
+            F = Ffunc(params)
+
+            NmF, _ = N_solve_2d(F)
+            FtNmF  = F.T @ NmF
+
+            if T_is_callable:
+                Tmat   = T(params)
+                NmT, _ = N_solve_2d(Tmat)
+                FtNmT  = F.T @ NmT
+                TtNmT  = Tmat.T @ NmT
+                TtNmF  = Tmat.T @ NmF
+            else:
+                NmT   = NmT_const
+                FtNmT = F.T @ NmT
+                TtNmT = TtNmT_const
+                TtNmF = T.T @ NmF
+
+            if y_is_callable:
+                yp       = y(params)
+                Nmy, ldN = N_solve_1d(yp) if yp.ndim == 1 else N_solve_2d(yp)
+                ytNmy    = yp @ Nmy
+                FtNmy    = F.T @ Nmy
+                TtNmy    = (T(params).T @ Nmy) if T_is_callable else (T.T @ Nmy)
+            else:
+                FtNmy = NmF.T @ y
+                TtNmy = (T(params).T @ Nmy_fixed) if T_is_callable else (T.T @ Nmy_fixed)
+                ytNmy = ytNmy_fixed
+                ldN   = ldN_fixed
+
+            Pinv, ldP = P_var_inv(params)
+            cf        = matrix_factor(Pinv + FtNmF)
+
+            sol  = matrix_solve(cf, FtNmy)
+            sol2 = matrix_solve(cf, FtNmT)
+
+            L = cf[0]
+            logdet_S = matrix_norm * jnp.logdet(jnp.diag(L))
+            ldP_total = 0.0 if ldP is None else jnp.sum(jnp.asarray(ldP))
+
+            a = -0.5 * (ytNmy - FtNmy.T @ sol) - 0.5 * (ldN + ldP_total + logdet_S)
+            b = TtNmy - TtNmF @ sol
+            c = TtNmT - TtNmF @ sol2
+            return a, b, c
+
+        pset = set()
+        pset.update(getattr(Ffunc, 'params', []) or [])
+        pset.update(getattr(P_var_inv, 'params', []) or [])
+        if y_is_callable:
+            pset.update(getattr(y, 'params', []) or [])
+        if T_is_callable:
+            pset.update(getattr(T, 'params', []) or [])
+        kernelterms.params = sorted(pset)
+        return kernelterms
 
 
 class WoodburyKernel_varNP(VariableKernel):
@@ -1882,8 +2050,7 @@ class WoodburyKernel_varN(VariableKernel):
             NmF, ldN = N_solve_2d(params, F)
             NmFty = NmF.T @ y
 
-            epsilon = 1e-8 * jnp.eye(Pinv.shape[0])
-            cf = matrix_factor(Pinv + F.T @ NmF + epsilon)
+            cf = matrix_factor(Pinv + F.T @ NmF)
             ld = ldN + ldP + matrix_norm * jnp.logdet(jnp.diag(cf[0]))
 
             return N_solve_1d(params, y)[0] - NmF @ matrix_solve(cf, NmFty), ld
@@ -1911,8 +2078,7 @@ class WoodburyKernel_varN(VariableKernel):
             NmFl, ldN = N_solve_2d(params, Fl)
             NmFltFr = NmFl.T @ Fr
 
-            epsilon = 1e-8 * jnp.eye(Pinv.shape[0])
-            cf = matrix_factor(Pinv + Fl.T @ NmFl + epsilon)
+            cf = matrix_factor(Pinv + Fl.T @ NmFl)
             ld = ldN + ldP + matrix_norm * jnp.logdet(jnp.diag(cf[0]))
 
             return N_solve_2d(params, Fr)[0] - NmFl @ matrix_solve(cf, NmFltFr), ld
