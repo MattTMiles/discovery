@@ -371,6 +371,8 @@
 <li class="toctree-l3"><a class="reference internal" href="../../api/matrix.html#discovery.matrix.WoodburyKernel_varFP"><code class="docutils literal notranslate"><span class="pre">WoodburyKernel_varFP</span></code></a><ul>
 <li class="toctree-l4"><a class="reference internal" href="../../api/matrix.html#discovery.matrix.WoodburyKernel_varFP.make_kernelproduct_vary"><code class="docutils literal notranslate"><span class="pre">WoodburyKernel_varFP.make_kernelproduct_vary()</span></code></a></li>
 <li class="toctree-l4"><a class="reference internal" href="../../api/matrix.html#discovery.matrix.WoodburyKernel_varFP.make_kernelproduct"><code class="docutils literal notranslate"><span class="pre">WoodburyKernel_varFP.make_kernelproduct()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="../../api/matrix.html#discovery.matrix.WoodburyKernel_varFP.make_kernelsolve"><code class="docutils literal notranslate"><span class="pre">WoodburyKernel_varFP.make_kernelsolve()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="../../api/matrix.html#discovery.matrix.WoodburyKernel_varFP.make_kernelterms"><code class="docutils literal notranslate"><span class="pre">WoodburyKernel_varFP.make_kernelterms()</span></code></a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../../api/matrix.html#discovery.matrix.WoodburyKernel_varNP"><code class="docutils literal notranslate"><span class="pre">WoodburyKernel_varNP</span></code></a><ul>
@@ -515,7 +517,7 @@
     <span class="s2">&quot;(.*_)?dm_gp_alpha&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span>
     <span class="s2">&quot;(.*_)?chrom_gp_log10_A&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mi">20</span><span class="p">,</span> <span class="o">-</span><span class="mi">11</span><span class="p">],</span>
     <span class="s2">&quot;(.*_)?chrom_gp_gamma&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">7</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?chrom_gp_alpha&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span>
+    <span class="s2">&quot;(.*_)?chrom_gp_alpha&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mf">2.5</span><span class="p">,</span> <span class="mi">14</span><span class="p">],</span> <span class="c1"># scattering noise. Should be steeper than DM</span>
     <span class="s2">&quot;crn_log10_rho&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mi">9</span><span class="p">,</span> <span class="o">-</span><span class="mi">4</span><span class="p">],</span>
     <span class="s2">&quot;gw_(.*_)?log10_rho&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mi">9</span><span class="p">,</span> <span class="o">-</span><span class="mi">4</span><span class="p">],</span>
     <span class="sa">r</span><span class="s2">&quot;(.*_)?red_noise_log10_rho\(([0-9]*)\)&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mi">9</span><span class="p">,</span> <span class="o">-</span><span class="mi">4</span><span class="p">],</span>
@@ -530,14 +532,6 @@
     <span class="s2">&quot;cw_log10_h0&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mf">18.0</span><span class="p">,</span> <span class="o">-</span><span class="mf">11.0</span><span class="p">],</span>
     <span class="s2">&quot;cw_phi_earth&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mf">0.</span><span class="p">,</span> <span class="mi">2</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">],</span>
     <span class="s2">&quot;(.*_)?cw_phi_psr&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mf">0.</span><span class="p">,</span> <span class="mi">2</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?chrom1yr_log10_A&quot;</span><span class="p">:[</span><span class="o">-</span><span class="mi">20</span><span class="p">,</span> <span class="o">-</span><span class="mi">5</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?chrom1yr_phase&quot;</span><span class="p">:[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?chrom1yr_idx&quot;</span><span class="p">:[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">14</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?chrom_bump_log10_A&quot;</span><span class="p">:[</span><span class="o">-</span><span class="mi">10</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?chrom_bump_idx&quot;</span><span class="p">:[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">14</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?chrom_bump_sign_param&quot;</span><span class="p">:[</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?sw_gp_log10_A&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mi">20</span><span class="p">,</span> <span class="o">-</span><span class="mi">11</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?sw_gp_gamma&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">7</span><span class="p">],</span>
 <span class="p">}</span>
 
 <div class="viewcode-block" id="getprior_uniform">
