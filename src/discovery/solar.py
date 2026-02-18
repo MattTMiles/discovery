@@ -4,8 +4,6 @@ import jax.numpy as jnp
 
 from . import const
 from . import matrix
-from . import fourierbasis
-from . import quantize
 
 AU_light_sec = const.AU / const.c  # 1 AU in light seconds
 AU_pc = const.AU / const.pc        # 1 AU in parsecs (for DM normalization)
@@ -16,8 +14,9 @@ def make_solardmfourierbasis(psr, components, T=None):
     that you include a deterministic solar wind delay, which samples
     n_earth, and here these are stochastic fluctuations on top of that. 
     """
-    f, df, fmat = ds.fourierbasis(psr, components, T)
-    shape = ds.make_solardm(psr)
+    from . import signals
+    f, df, fmat = signals.fourierbasis(psr, components, T)
+    shape = make_solardm(psr)
     return f, df, fmat * shape(1.)[:, None]
 
 def theta_impact(psr):
@@ -86,7 +85,8 @@ def fourierbasis_solar_dm(psr,
     """
 
     # get base Fourier design matrix and frequencies
-    f, df, fmat = fourierbasis(psr, components, T)
+    from . import signals
+    f, df, fmat = signals.fourierbasis(psr, components, T)
     theta, R_earth, _, _ = theta_impact(psr)
     dm_sol_wind = dm_solar(1.0, theta, R_earth)
     dt_DM = dm_sol_wind * 4.148808e3 / (psr.freqs**2)
@@ -103,6 +103,7 @@ def makegp_timedomain_solar_dm(psr, covariance, dt=1.0, common=[], name='timedom
      dm_sol_wind = dm_solar(1.0, theta, R_earth)
      dt_DM = dm_sol_wind * 4.148808e3 / (psr.freqs**2)
  
+     from .signals import quantize
      bins = quantize(psr.toas, dt)
      Umat = np.vstack([bins == i for i in range(bins.max() + 1)]).T.astype('d')
      Umat = Umat * dt_DM[:, None] 

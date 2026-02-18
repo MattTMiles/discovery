@@ -30,6 +30,7 @@ def update_priordict_standard_mpta():
         '(.*_)?log10_ecorr':        [-10, -5],
         # Per-pulsar GW background parameters
         '(.*_)?bkgrnd_log10_A':     [-18, -11],
+        '(.*_)?gw_log10_A':     [-18, -11],
         # GP parameters
         '(.*_)?red_noise_log10_A.*':  [-18, -11],
         '(.*_)?red_noise_gamma.*':    [0, 7],
@@ -79,30 +80,83 @@ def update_priordict_standard_mpta():
 
 update_priordict_standard_mpta() # Ensure priordict_standard is updated on import, but also update when a model is created to catch any changes during likelihood/prior initialisation
 
+def _get_F_ncols(gp):
+    """Get the number of columns in a GP's F matrix, whether static or callable."""
+    if callable(gp.F):
+        return sum(s.stop - s.start for s in gp.index.values())
+    else:
+        return gp.F.shape[1]
+
+
 def gps2commongp(gps):
+    """Merge per-pulsar compound GPs into a single vectorised VariableGP.
+
+    Works for both static F (numpy arrays) and callable F (parameter-dependent,
+    e.g. chromatic or band-noise GPs). When any GP has callable F, the per-pulsar
+    F entries are wrapped so they are all padded to the same column count.
+
+    Handles both 1D diagonal priors (fourier basis) and 2D dense priors (fftcov basis).
+    """
     priors = [gp.Phi.getN for gp in gps]
     pmax = len(gps)
-    ns = [gp.F.shape[1] for gp in gps]  # Does not work for callable gp.F (e.g. chromatic GP)
+    ns = [_get_F_ncols(gp) for gp in gps]
     nmax = max(ns)
 
-    def prior(params):
-        yp = matrix.jnp.full((pmax, nmax), 1e-40)
-        for i,p in enumerate(priors):
-            yp = yp.at[i, :ns[i]].set(p(params))
+    # Detect whether priors are 1D (diagonal) or 2D (dense covariance)
+    is_2d = isinstance(gps[0].Phi, matrix.NoiseMatrix2D_var)
 
-        return yp
+    if is_2d:
+        # 2D priors: each p(params) returns (n_i, n_i), pad to (nmax, nmax)
+        def prior(params):
+            yp = matrix.jnp.full((pmax, nmax, nmax), 1e-40) * matrix.jnp.eye(nmax)
+            for i, p in enumerate(priors):
+                yp = yp.at[i, :ns[i], :ns[i]].set(p(params))
+            return yp
+        prior.params = sorted(set([par for p in priors for par in p.params]))
+    else:
+        # 1D priors: each p(params) returns (n_i,), pad to (nmax,)
+        def prior(params):
+            yp = matrix.jnp.full((pmax, nmax), 1e-40)
+            for i, p in enumerate(priors):
+                yp = yp.at[i, :ns[i]].set(p(params))
+            return yp
+        prior.params = sorted(set([par for p in priors for par in p.params]))
 
-    prior.params = sorted(set([par for p in priors for par in p.params]))
-    Fs = [np.pad(gp.F, [(0,0), (0,nmax - gp.F.shape[1])]) for gp in gps]
+    has_callable = any(callable(gp.F) for gp in gps)
 
-    return matrix.VariableGP(matrix.VectorNoiseMatrix1D_var(prior), Fs)
+    if has_callable:
+        # Build per-pulsar F entries, wrapping callables so they zero-pad to nmax cols
+        Fs = []
+        F_params_all = []
+        for gp, n in zip(gps, ns):
+            if callable(gp.F):
+                # Capture gp.F and n in a closure
+                def _make_padded(Ffunc, ncols):
+                    pad_width = nmax - ncols
+                    def padded_F(params):
+                        return jnp.pad(Ffunc(params), [(0, 0), (0, pad_width)])
+                    padded_F.params = Ffunc.params
+                    return padded_F
+                Fs.append(_make_padded(gp.F, n))
+                F_params_all.extend(gp.F.params)
+            else:
+                Fs.append(np.pad(gp.F, [(0, 0), (0, nmax - n)]))
+    else:
+        Fs = [np.pad(gp.F, [(0, 0), (0, nmax - gp.F.shape[1])]) for gp in gps]
+
+    if is_2d:
+        result = matrix.VariableGP(matrix.VectorNoiseMatrix2D_var(prior), Fs)
+    else:
+        result = matrix.VariableGP(matrix.VectorNoiseMatrix1D_var(prior), Fs)
+    result._has_callable_F = has_callable
+    return result
 
 
 def make_psr_gps_fourier(psr, max_cadence_days=14, Tspan=None, background=True, red=True, red2=False, dm=True, chrom=True, sw=True, band=False, band_low=False, band_alpha=False):
     psr_Tspan = signals.getspan(psr) if Tspan is None else Tspan
     psr_components = int(psr_Tspan / (max_cadence_days * 86400))
 
-    return (([signals.makegp_fourier(psr, powerlaw_bkgrnd, components=psr_components, name='bkgrnd')] if background else []) + \
+    return (([signals.makegp_fourier(psr, matrix.partial(signals.powerlaw, gamma=13/3.), components=psr_components, name='gw')] if background else []) + \
             ([signals.makegp_fourier(psr, signals.powerlaw, components=psr_components, name='red_noise')] if red else []) + \
             ([signals.makegp_fourier(psr, signals.powerlaw, components=psr_components, name='red_noise2')] if red2 else []) + \
             ([signals.makegp_fourier(psr, signals.powerlaw, components=psr_components, fourierbasis=signals.fourierbasis_dm, name='dm_gp')] if dm else [])+ \
@@ -118,7 +172,7 @@ def make_psr_gps_fftint(psr, max_cadence_days=14, Tspan=None, background=True, r
     psr_components = int(psr_Tspan / (max_cadence_days * 86400))
     psr_knots = 2 * psr_components + 1
 
-    return (([signals.makegp_fftcov(psr, powerlaw_bkgrnd, components=psr_knots, name='bkgrnd')] if background else []) + \
+    return (([signals.makegp_fftcov(psr, matrix.partial(signals.powerlaw, gamma=13/3.), components=psr_knots, name='gw')] if background else []) + \
             ([signals.makegp_fftcov(psr, signals.powerlaw, components=psr_knots, name='red_noise')] if red else []) + \
             ([signals.makegp_fftcov(psr, signals.powerlaw, components=psr_knots, name='red_noise2')] if red2 else []) + \
             ([signals.makegp_fftcov_dm(psr, signals.powerlaw, components=psr_knots, name='dm_gp')] if dm else [])+ \
@@ -129,14 +183,33 @@ def make_psr_gps_fftint(psr, max_cadence_days=14, Tspan=None, background=True, r
             ([signals.makegp_fftcov_band_range_alpha(psr, signals.powerlaw, components=psr_knots, name='bandalpha_gp')] if band_alpha else []))
 
 
-def make_common_gps_fftint(psrs, common_knots=61, max_cadence_days=14, red=True, dm=True, chrom=True, sw=True, band=True, band_alpha=False):
-    Tspan = signals.getspan(psrs)
-    if not chrom and not band and not band_alpha: # Static Fs, so we can use gps2commongp
-        return gps2commongp([matrix.CompoundGP(make_psr_gps_fftint(psr, max_cadence_days=max_cadence_days, red=red, dm=dm, chrom=chrom, sw=sw, band=band, band_alpha=band_alpha) +
-                                               [signals.makegp_fftcov(psr, signals.powerlaw, common_knots, Tspan, common=['curn_log10_A', 'curn_gamma'], name='curn')])
-                            for psr in psrs]) # Does not work yet
-    else:
-        return # Does not work yet
+def make_common_gps_fftint(psrs, common_knots=61, max_cadence_days=14, Tspan=None,
+                           background=True, red=True, red2=False, dm=True, chrom=True,
+                           sw=True, band=False, band_low=False, band_alpha=False):
+    """Merge per-pulsar GPs into a single vectorised GP for use in ArrayLikelihood.
+
+    Works for all GP types including those with callable F (chromatic, band, etc.).
+    """
+    if Tspan is None:
+        Tspan = signals.getspan(psrs)
+    return gps2commongp([matrix.CompoundGP(
+        make_psr_gps_fftint(psr, max_cadence_days=max_cadence_days, Tspan=Tspan,
+                            background=background, red=red, red2=red2, dm=dm, chrom=chrom,
+                            sw=sw, band=band, band_low=band_low, band_alpha=band_alpha))
+        for psr in psrs])
+
+
+def make_common_gps_fourier(psrs, max_cadence_days=14, Tspan=None,
+                            background=True, red=True, red2=False, dm=True, chrom=True,
+                            sw=True, band=False, band_low=False, band_alpha=False):
+    """Fourier-basis variant of make_common_gps_fftint."""
+    if Tspan is None:
+        Tspan = signals.getspan(psrs)
+    return gps2commongp([matrix.CompoundGP(
+        make_psr_gps_fourier(psr, max_cadence_days=max_cadence_days, Tspan=Tspan,
+                             background=background, red=red, red2=red2, dm=dm, chrom=chrom,
+                             sw=sw, band=band, band_low=band_low, band_alpha=band_alpha))
+        for psr in psrs])
 
 def single_pulsar_noise(psr, fftint=True, max_cadence_days=14, Tspan=None, noisedict={}, tm_variable=False, timing_inds=None, outliers=False, global_ecorr=False,
                         background=True, red=True, red2=False, dm=True, chrom=True, sw=True, band=False, band_low=False, band_alpha=False, # GP models
@@ -222,3 +295,65 @@ def common_noise(psrs, chain_dfs, fftInt=False, max_cadence_days=14, name="gw_cr
 
     return likelihood.GlobalLikelihood(psls)
     # return likelihood.ArrayLikelihood(psls)
+
+
+def common_noise_array(psrs, chain_dfs, fftInt=False, max_cadence_days=14, name="gw_crn"):
+    """Like common_noise, but uses ArrayLikelihood + gps2commongp for faster vectorised evaluation.
+
+    All per-pulsar GPs (including those with callable F such as chromatic/band) are merged
+    into a single vectorised GP with a common basis, which enables batched Woodbury algebra.
+    """
+    def has_param(df, param_string="red_noise"):
+        return any(f"{param_string}" in col for col in list(df.columns))
+
+    Tspan = signals.getspan(psrs)
+    common_components = int(Tspan / (max_cadence_days * 86400))
+    common_knots = 2 * common_components + 1
+
+    pslmodels = []
+    per_psr_gps = []
+    for psr, df in zip(psrs, chain_dfs):
+        if not any(psr.name in col for col in df.columns):
+            raise ValueError("Chain data frames do not match pulsar names")
+        ml_idx = df['logl'].idxmax()
+        noisedict = {col: df.loc[ml_idx, col] for col in df.columns if col.startswith(psr.name)}
+
+        # White noise + timing model (goes into PulsarLikelihood)
+        measurement_noise = signals.makenoise_measurement(psr, tnequad=True, noisedict=noisedict)
+        tm = signals.makegp_timing(psr, svd=True)
+        if not isinstance(tm, list):
+            tm = [tm]
+        base_components = [psr.residuals] + tm + [measurement_noise]
+        base_components += [signals.makegp_ecorr(psr, noisedict=noisedict)]
+        if has_param(df, f"{psr.name}_ecorr"):
+            base_components += [signals.makegp_ecorr_simple(psr, noisedict=noisedict)]
+
+        psl = likelihood.PulsarLikelihood(base_components)
+        pslmodels.append(psl)
+
+        # Per-pulsar noise GPs + CURN (go into commongp)
+        gp_kwargs = dict(
+            max_cadence_days=max_cadence_days, Tspan=Tspan, background=False,
+            red=has_param(df, "red_noise"),
+            dm=has_param(df, "dm_gp"),
+            chrom=has_param(df, "chrom_gp"),
+            sw=has_param(df, "sw_gp"),
+            band=has_param(df, "band_gp"),
+            band_low=has_param(df, "band_low_gp"),
+            band_alpha=has_param(df, "bandalpha_gp"),
+        )
+        if fftInt:
+            gps = make_psr_gps_fftint(psr, **gp_kwargs)
+            curn = signals.makegp_fftcov(psr, signals.powerlaw, common_knots, Tspan,
+                                         common=['curn_log10_A', 'curn_gamma'], name='curn')
+        else:
+            gps = make_psr_gps_fourier(psr, **gp_kwargs)
+            curn = signals.makegp_fourier(psr, signals.powerlaw, common_components, Tspan,
+                                          common=['curn_log10_A', 'curn_gamma'], name='curn')
+        curn_list = curn if isinstance(curn, list) else [curn]
+        per_psr_gps.append(matrix.CompoundGP(gps + curn_list))
+
+        print("Including pulsar", psr.name, "in ArrayLikelihood")
+
+    commongp = gps2commongp(per_psr_gps)
+    return likelihood.ArrayLikelihood(pslmodels, commongp=commongp)

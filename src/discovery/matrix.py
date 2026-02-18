@@ -262,7 +262,26 @@ def VectorCompoundGP(gplist):
     if all(isinstance(gp, (VariableGP, GlobalVariableGP)) for gp in gplist):
         # each gp.F is a tuple of F matrices, one for each pulsar
         # globalgp has gp.Fs instead, which maybe is not ideal
-        F = [np.hstack(Fs) for Fs in zip(*[gp.F if hasattr(gp, 'F') else gp.Fs for gp in gplist])]
+        per_psr_Fs = list(zip(*[gp.F if hasattr(gp, 'F') else gp.Fs for gp in gplist]))
+
+        if any(any(callable(f) for f in psr_fs) for psr_fs in per_psr_Fs):
+            # Some per-pulsar F entries are callable; build callable per-pulsar F
+            F = []
+            all_F_params = []
+            for psr_fs in per_psr_Fs:
+                if any(callable(f) for f in psr_fs):
+                    def _make_hstack(fs):
+                        fparams = sum((f.params for f in fs if callable(f)), [])
+                        def hstacked(params):
+                            return jnp.hstack([f(params) if callable(f) else f for f in fs])
+                        hstacked.params = fparams
+                        return hstacked
+                    F.append(_make_hstack(psr_fs))
+                    all_F_params.extend(f.params for f in psr_fs if callable(f))
+                else:
+                    F.append(np.hstack(psr_fs))
+        else:
+            F = [np.hstack(psr_fs) for psr_fs in per_psr_Fs]
 
         if all(isinstance(gp.Phi, VectorNoiseMatrix1D_var) for gp in gplist):
             def Phi(params):
@@ -1695,6 +1714,119 @@ class WoodburyKernel_varP(VariableKernel):
 
         return kernelsolve
 
+    def make_kernelterms_vary(self, y, T):
+        # Sigma = (N + F P Ft)
+        # Sigma^-1 = Nm - Nm F (P^-1 + Ft Nm F)^-1 Ft Nm
+        #
+        # returns
+        # yt Sigma^-1 y = yt Nm y - (yt Nm F) C^-1 (Ft Nm y)
+        # Tt Sigma^-1 y = Tt Nm y - Tt Nm F C^-1 (Ft Nm y)
+        # Tt Sigma^-1 T = Tt Nm T - (Tt Nm F) C^-1 (Ft Nm T)
+
+        y_var = y
+        N_solve_1d = self.N.make_solve_1d()
+        N_solve_2d = self.N.make_solve_2d()
+        Tmat = jnparray(T)
+
+        if callable(self.F):
+            Ffunc = self.F
+        else:
+            Fmat = jnparray(self.F)
+            Ffunc = lambda params: Fmat
+            Ffunc.params = []
+
+        P_var_inv = self.P_var.make_inv()
+
+        def kernelterms(params):
+            yp = y_var(params)
+            Fmat = Ffunc(params)
+
+            Nmy, ldN = N_solve_1d(params, yp)
+            ytNmy = yp @ Nmy
+            FtNmy = Fmat.T @ Nmy
+            TtNmy = Tmat.T @ Nmy
+
+            NmF, _ = N_solve_2d(params, Fmat)
+            FtNmF = Fmat.T @ NmF
+            TtNmF = Tmat.T @ NmF
+
+            NmT, _ = N_solve_2d(params, Tmat)
+            FtNmT = Fmat.T @ NmT
+            TtNmT = Tmat.T @ NmT
+
+            Pinv, ldP = P_var_inv(params)
+            cf = matrix_factor(Pinv + FtNmF)
+
+            sol = matrix_solve(cf, FtNmy)
+            sol2 = matrix_solve(cf, FtNmT)
+
+            a = -0.5 * (ytNmy - FtNmy.T @ sol) - 0.5 * (ldN + ldP + matrix_norm * jnp.logdet(jnp.diag(cf[0])))
+            b = TtNmy - TtNmF @ sol
+            c = TtNmT - TtNmF @ sol2
+
+            return a, b, c
+
+        kernelterms.params = sorted(set(self.N.params + P_var_inv.params + Ffunc.params + y.params))
+
+        return kernelterms
+
+    def make_kernelterms(self, y, T):
+        # Sigma = (N + F P Ft)
+        # Sigma^-1 = Nm - Nm F (P^-1 + Ft Nm F)^-1 Ft Nm
+        #
+        # returns
+        # yt Sigma^-1 y = yt Nm y - (yt Nm F) C^-1 (Ft Nm y)
+        # Tt Sigma^-1 y = Tt Nm y - Tt Nm F C^-1 (Ft Nm y)
+        # Tt Sigma^-1 T = Tt Nm T - (Tt Nm F) C^-1 (Ft Nm T)
+
+        if callable(y):
+            return self.make_kernelterms_vary(y, T)
+
+        N_solve_1d = self.N.make_solve_1d()
+        N_solve_2d = self.N.make_solve_2d()
+        Tmat = jnparray(T)
+
+        if callable(self.F):
+            Ffunc = self.F
+        else:
+            Fmat = jnparray(self.F)
+            Ffunc = lambda params: Fmat
+            Ffunc.params = []
+
+        P_var_inv = self.P_var.make_inv()
+
+        def kernelterms(params):
+            Fmat = Ffunc(params)
+
+            Nmy, ldN = N_solve_1d(params, y)
+            ytNmy = y @ Nmy
+            FtNmy = Fmat.T @ Nmy
+            TtNmy = Tmat.T @ Nmy
+
+            NmF, _ = N_solve_2d(params, Fmat)
+            FtNmF = Fmat.T @ NmF
+            TtNmF = Tmat.T @ NmF
+
+            NmT, _ = N_solve_2d(params, Tmat)
+            FtNmT = Fmat.T @ NmT
+            TtNmT = Tmat.T @ NmT
+
+            Pinv, ldP = P_var_inv(params)
+            cf = matrix_factor(Pinv + FtNmF)
+
+            sol = matrix_solve(cf, FtNmy)
+            sol2 = matrix_solve(cf, FtNmT)
+
+            a = -0.5 * (ytNmy - FtNmy.T @ sol) - 0.5 * (ldN + ldP + matrix_norm * jnp.logdet(jnp.diag(cf[0])))
+            b = TtNmy - TtNmF @ sol
+            c = TtNmT - TtNmF @ sol2
+
+            return a, b, c
+
+        kernelterms.params = sorted(set(self.N.params + P_var_inv.params + Ffunc.params))
+
+        return kernelterms
+
     def make_kernelproduct_vary(self, y):
         NmF, ldN = self.N.solve_2d(self.F)
         FtNmF = self.F.T @ NmF
@@ -2447,6 +2579,110 @@ class VectorWoodburyKernel_varP(VariableKernel):
         kernelterms.params = self.P_var.params
 
         return kernelterms
+
+
+class VectorWoodburyKernel_varFP(VariableKernel):
+    """Like VectorWoodburyKernel_varP but supports callable (parameter-dependent) per-pulsar F matrices.
+
+    When some or all per-pulsar GPs have callable F (e.g. chromatic or band-noise GPs),
+    N^{-1} F cannot be pre-computed at construction time. Instead, F(params) is evaluated
+    inside each likelihood call and the Woodbury algebra proceeds from there.
+
+    Also handles variable-N (WoodburyKernel_varN) per-pulsar kernels, where solve
+    functions require (params, y) instead of just (y).
+    """
+    def __init__(self, Ns, Fs, P_var):
+        self.Ns, self.Fs, self.P_var = Ns, Fs, P_var
+
+    @staticmethod
+    def _wrap_solve_1d(N):
+        """Return a uniform solve_1d(params, y) regardless of N type."""
+        raw = N.make_solve_1d()
+        if hasattr(N, 'N_var'):
+            # WoodburyKernel_varN: raw already takes (params, y)
+            return raw
+        else:
+            def solve_1d(params, y):
+                return raw(y)
+            solve_1d.params = getattr(raw, 'params', [])
+            return solve_1d
+
+    @staticmethod
+    def _wrap_solve_2d(N):
+        """Return a uniform solve_2d(params, F) regardless of N type."""
+        raw = N.make_solve_2d()
+        if hasattr(N, 'N_var'):
+            return raw
+        else:
+            def solve_2d(params, F):
+                return raw(F)
+            solve_2d.params = getattr(raw, 'params', [])
+            return solve_2d
+
+    def make_kernelproduct(self, ys):
+        kmeans = getattr(self, 'means', None)
+
+        # Wrap solvers to uniform (params, y/F) signature
+        N_solve_1ds = [self._wrap_solve_1d(N) for N in self.Ns]
+        N_solve_2ds = [self._wrap_solve_2d(N) for N in self.Ns]
+        P_var_inv = self.P_var.make_inv()
+
+        Fs = self.Fs
+
+        def kernelproduct(params):
+            FtNmFs = []
+            NmFtys = []
+            ytNmy_total = 0.0
+            ldN_total = 0.0
+
+            for i in range(len(Fs)):
+                # Get F (may be callable)
+                F_i = Fs[i](params) if callable(Fs[i]) else Fs[i]
+
+                # Get N^{-1}F (always parametric call)
+                NmF_i, ldN_i = N_solve_2ds[i](params, F_i)
+
+                FtNmFs.append(F_i.T @ NmF_i)
+
+                # Get y terms
+                yp = ys[i](params) if callable(ys[i]) else ys[i]
+                Nmy, _ = N_solve_1ds[i](params, yp)
+                ytNmy_total = ytNmy_total + yp @ Nmy
+                NmFtys.append(NmF_i.T @ yp)
+
+                ldN_total = ldN_total + ldN_i
+
+            FtNmF = jnp.array(FtNmFs)
+            NmFty = jnp.array(NmFtys)
+
+            Pinv, ldP = P_var_inv(params)
+
+            if Pinv.ndim == 2:
+                i1, i2 = jnp.diag_indices(Pinv.shape[1], ndim=2)
+                cf = matrix_factor(FtNmF.at[:, i1, i2].add(Pinv))
+            else:
+                cf = matrix_factor(FtNmF + Pinv)
+
+            ytXy = jnp.sum(NmFty * matrix_solve(cf, NmFty))
+
+            i1, i2 = jnp.diag_indices(cf[0].shape[1], ndim=2)
+            logp = -0.5 * (ytNmy_total - ytXy) - 0.5 * (ldN_total + jnp.sum(ldP) + matrix_norm * jnp.sum(jnp.log(jnp.abs(cf[0][:, i1, i2]))))
+
+            if kmeans is not None:
+                a0 = kmeans(params)
+                FtNmFa0 = jax.vmap(jnp.matmul)(FtNmF, a0)
+                logp = logp - jnp.sum((0.5 * FtNmFa0 - NmFty) * (a0 - matrix_solve(cf, FtNmFa0)))
+
+            return logp
+
+        F_params = sum((F.params if callable(F) else [] for F in self.Fs), [])
+        y_params = sum((y.params if callable(y) else [] for y in ys), [])
+        N_params = sum((s1d.params for s1d in N_solve_1ds), [])
+        params_kmeans = kmeans.params if kmeans is not None else []
+        kernelproduct.params = sorted(set(P_var_inv.params + F_params + y_params + N_params + params_kmeans))
+
+        return kernelproduct
+
 
 def zero_out_negative_eigenvalues(M):
     eigs, vecs = np.linalg.eigh(M)

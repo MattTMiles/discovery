@@ -621,12 +621,15 @@ class ArrayLikelihood:
         commongp = matrix.VectorCompoundGP(self.commongp)
 
         Ns, self.ys = zip(*[(psl.N, psl.y) for psl in self.psls])
-        self.vsm = matrix.VectorWoodburyKernel_varP(Ns, commongp.F, commongp.Phi)
+        has_callable_F = any(callable(F) for F in commongp.F) if isinstance(commongp.F, list) else callable(commongp.F)
+        if has_callable_F:
+            self.vsm = matrix.VectorWoodburyKernel_varFP(Ns, commongp.F, commongp.Phi)
+        else:
+            self.vsm = matrix.VectorWoodburyKernel_varP(Ns, commongp.F, commongp.Phi)
         self.vsm.index = getattr(commongp, 'index', None)
         self.vsm.means = getattr(commongp, 'means', None)
 
         if self.globalgp is None:
-            print("Got", self.vsm.means)
             loglike = self.vsm.make_kernelproduct(self.ys)
         else:
             P_var_inv = getattr(self.globalgp, "Phi_inv", None) or self.globalgp.Phi.make_inv()
