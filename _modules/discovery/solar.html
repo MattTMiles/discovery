@@ -5,7 +5,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>discovery.prior &mdash; Discovery 0.5 documentation</title>
+  <title>discovery.solar &mdash; Discovery 0.5 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=b86133f3" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=9edc463e" />
 
@@ -604,7 +604,7 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../index.html">Module code</a></li>
-      <li class="breadcrumb-item active">discovery.prior</li>
+      <li class="breadcrumb-item active">discovery.solar</li>
       <li class="wy-breadcrumbs-aside">
       </li>
   </ul>
@@ -613,274 +613,144 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <h1>Source code for discovery.prior</h1><div class="highlight"><pre>
-<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">re</span>
+  <h1>Source code for discovery.solar</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">inspect</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">jax.numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">jnp</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-
+<span class="kn">from</span><span class="w"> </span><span class="nn">.</span><span class="w"> </span><span class="kn">import</span> <span class="n">const</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">.</span><span class="w"> </span><span class="kn">import</span> <span class="n">matrix</span>
-<span class="n">jnp</span> <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">jnp</span>
 
-<div class="viewcode-block" id="uniform">
-<a class="viewcode-back" href="../../api/prior.html#discovery.prior.uniform">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">uniform</span><span class="p">(</span><span class="n">par</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">logpriorfunc</span><span class="p">(</span><span class="n">params</span><span class="p">):</span>
-        <span class="k">return</span> <span class="n">matrix</span><span class="o">.</span><span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">matrix</span><span class="o">.</span><span class="n">jnp</span><span class="o">.</span><span class="n">logical_and</span><span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="n">par</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="n">a</span><span class="p">,</span> <span class="n">params</span><span class="p">[</span><span class="n">par</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">b</span><span class="p">),</span> <span class="mi">0</span><span class="p">,</span> <span class="o">-</span><span class="n">matrix</span><span class="o">.</span><span class="n">jnp</span><span class="o">.</span><span class="n">inf</span><span class="p">)</span>
+<span class="n">AU_light_sec</span> <span class="o">=</span> <span class="n">const</span><span class="o">.</span><span class="n">AU</span> <span class="o">/</span> <span class="n">const</span><span class="o">.</span><span class="n">c</span>  <span class="c1"># 1 AU in light seconds</span>
+<span class="n">AU_pc</span> <span class="o">=</span> <span class="n">const</span><span class="o">.</span><span class="n">AU</span> <span class="o">/</span> <span class="n">const</span><span class="o">.</span><span class="n">pc</span>        <span class="c1"># 1 AU in parsecs (for DM normalization)</span>
 
-    <span class="k">return</span> <span class="n">logpriorfunc</span></div>
-
-
-
-<span class="n">priordict_standard</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="s2">&quot;(.*_)?efac&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mf">0.1</span><span class="p">,</span> <span class="mi">10</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?t2equad&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mf">8.5</span><span class="p">,</span> <span class="o">-</span><span class="mi">5</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?tnequad&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mf">8.5</span><span class="p">,</span> <span class="o">-</span><span class="mi">5</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?log10_ecorr&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mf">8.5</span><span class="p">,</span> <span class="o">-</span><span class="mi">5</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?rednoise_log10_A.*&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mi">20</span><span class="p">,</span> <span class="o">-</span><span class="mi">11</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?rednoise_gamma.*&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">7</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?rednoise_log10_fb&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mi">9</span><span class="p">,</span> <span class="o">-</span><span class="mi">6</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?red_noise_log10_A.*&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mi">20</span><span class="p">,</span> <span class="o">-</span><span class="mi">11</span><span class="p">],</span>  <span class="c1"># deprecated</span>
-    <span class="s2">&quot;(.*_)?red_noise_gamma.*&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">7</span><span class="p">],</span>  <span class="c1"># deprecated</span>
-    <span class="s2">&quot;(.*_)?red_noise_log10_fb&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mi">9</span><span class="p">,</span> <span class="o">-</span><span class="mi">6</span><span class="p">],</span>
-    <span class="s2">&quot;crn_log10_A.*&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mi">18</span><span class="p">,</span> <span class="o">-</span><span class="mi">11</span><span class="p">],</span>
-    <span class="s2">&quot;crn_gamma.*&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">7</span><span class="p">],</span>
-    <span class="s2">&quot;crn_log10_fb&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mi">9</span><span class="p">,</span> <span class="o">-</span><span class="mi">6</span><span class="p">],</span>
-    <span class="s2">&quot;gw_(.*_)?log10_A&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mi">18</span><span class="p">,</span> <span class="o">-</span><span class="mi">11</span><span class="p">],</span>
-    <span class="s2">&quot;gw_(.*_)?gamma&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">7</span><span class="p">],</span>
-    <span class="s2">&quot;gw_log10_fb&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mi">9</span><span class="p">,</span> <span class="o">-</span><span class="mi">6</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?dmgp_log10_A&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mi">20</span><span class="p">,</span> <span class="o">-</span><span class="mi">11</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?dmgp_gamma&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">7</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?dmgp_alpha&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?chromgp_log10_A&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mi">20</span><span class="p">,</span> <span class="o">-</span><span class="mi">11</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?chromgp_gamma&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">7</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?chromgp_alpha&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">7</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?dm_gp_log10_A&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mi">20</span><span class="p">,</span> <span class="o">-</span><span class="mi">11</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?dm_gp_gamma&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">7</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?dm_gp_alpha&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?chrom_gp_log10_A&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mi">20</span><span class="p">,</span> <span class="o">-</span><span class="mi">11</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?chrom_gp_gamma&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">7</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?chrom_gp_alpha&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mf">2.5</span><span class="p">,</span> <span class="mi">14</span><span class="p">],</span> <span class="c1"># scattering noise. Should be steeper than DM</span>
-    <span class="s2">&quot;crn_log10_rho&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mi">9</span><span class="p">,</span> <span class="o">-</span><span class="mi">4</span><span class="p">],</span>
-    <span class="s2">&quot;gw_(.*_)?log10_rho&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mi">9</span><span class="p">,</span> <span class="o">-</span><span class="mi">4</span><span class="p">],</span>
-    <span class="sa">r</span><span class="s2">&quot;(.*_)?red_noise_log10_rho\(([0-9]*)\)&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mi">9</span><span class="p">,</span> <span class="o">-</span><span class="mi">4</span><span class="p">],</span>
-    <span class="sa">r</span><span class="s2">&quot;(.*_)?red_noise_crn_log10_rho\(([0-9]*)\)&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mi">9</span><span class="p">,</span> <span class="o">-</span><span class="mi">4</span><span class="p">],</span>
-    <span class="s2">&quot;cw_ra&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">],</span>
-    <span class="s2">&quot;cw_dec&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mf">0.5</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">,</span> <span class="mf">0.5</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">],</span>
-    <span class="s2">&quot;cw_inc&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">],</span>
-    <span class="s2">&quot;cw_sindec&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">],</span>
-    <span class="s2">&quot;cw_cosinc&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">],</span>
-    <span class="s2">&quot;cw_psi&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">],</span>
-    <span class="s2">&quot;cw_log10_f0&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mf">9.0</span><span class="p">,</span> <span class="o">-</span><span class="mf">7.0</span><span class="p">],</span>
-    <span class="s2">&quot;cw_log10_h0&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">-</span><span class="mf">18.0</span><span class="p">,</span> <span class="o">-</span><span class="mf">11.0</span><span class="p">],</span>
-    <span class="s2">&quot;cw_phi_earth&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mf">0.</span><span class="p">,</span> <span class="mi">2</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">],</span>
-    <span class="s2">&quot;(.*_)?cw_phi_psr&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mf">0.</span><span class="p">,</span> <span class="mi">2</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">],</span>
-<span class="p">}</span>
-
-<div class="viewcode-block" id="getprior_uniform">
-<a class="viewcode-back" href="../../api/prior.html#discovery.prior.getprior_uniform">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">getprior_uniform</span><span class="p">(</span><span class="n">par</span><span class="p">,</span> <span class="n">priordict</span><span class="o">=</span><span class="p">{}):</span>
-    <span class="n">priordict</span> <span class="o">=</span> <span class="p">{</span><span class="o">**</span><span class="n">priordict_standard</span><span class="p">,</span> <span class="o">**</span><span class="n">priordict</span><span class="p">}</span>
-
-    <span class="k">for</span> <span class="n">parname</span><span class="p">,</span> <span class="nb">range</span> <span class="ow">in</span> <span class="n">priordict</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-        <span class="k">if</span> <span class="n">re</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">parname</span><span class="p">,</span> <span class="n">par</span><span class="p">):</span>
-            <span class="k">return</span> <span class="nb">range</span>
-
-    <span class="k">raise</span> <span class="ne">KeyError</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;getprior_uniform: no prior for parameter </span><span class="si">{</span><span class="n">par</span><span class="si">}</span><span class="s1">.&#39;</span><span class="p">)</span></div>
+<div class="viewcode-block" id="make_solardmfourierbasis">
+<a class="viewcode-back" href="../../api/solar.html#discovery.solar.make_solardmfourierbasis">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">make_solardmfourierbasis</span><span class="p">(</span><span class="n">psr</span><span class="p">,</span> <span class="n">components</span><span class="p">,</span> <span class="n">T</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    for a fourier basis for the solar wind gp. this assumes</span>
+<span class="sd">    that you include a deterministic solar wind delay, which samples</span>
+<span class="sd">    n_earth, and here these are stochastic fluctuations on top of that. </span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">.</span><span class="w"> </span><span class="kn">import</span> <span class="n">signals</span>
+    <span class="n">f</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">fmat</span> <span class="o">=</span> <span class="n">signals</span><span class="o">.</span><span class="n">fourierbasis</span><span class="p">(</span><span class="n">psr</span><span class="p">,</span> <span class="n">components</span><span class="p">,</span> <span class="n">T</span><span class="p">)</span>
+    <span class="n">shape</span> <span class="o">=</span> <span class="n">make_solardm</span><span class="p">(</span><span class="n">psr</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">f</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">fmat</span> <span class="o">*</span> <span class="n">shape</span><span class="p">(</span><span class="mf">1.</span><span class="p">)[:,</span> <span class="kc">None</span><span class="p">]</span></div>
 
 
-<div class="viewcode-block" id="makelogprior_uniform">
-<a class="viewcode-back" href="../../api/prior.html#discovery.prior.makelogprior_uniform">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">makelogprior_uniform</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">priordict</span><span class="o">=</span><span class="p">{}):</span>
-    <span class="n">priordict</span> <span class="o">=</span> <span class="p">{</span><span class="o">**</span><span class="n">priordict_standard</span><span class="p">,</span> <span class="o">**</span><span class="n">priordict</span><span class="p">}</span>
+<div class="viewcode-block" id="theta_impact">
+<a class="viewcode-back" href="../../api/solar.html#discovery.solar.theta_impact">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">theta_impact</span><span class="p">(</span><span class="n">psr</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;From enterprise_extensions: use the attributes of an Enterprise</span>
+<span class="sd">    Pulsar object to calculate the solar impact angle.</span>
+<span class="sd">    Returns solar impact angle (rad), distance to Earth (R_earth),</span>
+<span class="sd">    impact distance (b), perpendicular distance (z_earth).&quot;&quot;&quot;</span>
 
-    <span class="n">priors</span> <span class="o">=</span> <span class="p">[]</span>
-    <span class="k">for</span> <span class="n">par</span> <span class="ow">in</span> <span class="n">params</span><span class="p">:</span>
-        <span class="k">for</span> <span class="n">parname</span><span class="p">,</span> <span class="nb">range</span> <span class="ow">in</span> <span class="n">priordict</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-            <span class="k">if</span> <span class="n">re</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">parname</span><span class="p">,</span> <span class="n">par</span><span class="p">):</span>
-                <span class="n">priors</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">uniform</span><span class="p">(</span><span class="n">par</span><span class="p">,</span> <span class="o">*</span><span class="nb">range</span><span class="p">))</span>
-                <span class="k">break</span>
+    <span class="n">earth</span> <span class="o">=</span> <span class="n">psr</span><span class="o">.</span><span class="n">planetssb</span><span class="p">[:,</span> <span class="mi">2</span><span class="p">,</span> <span class="p">:</span><span class="mi">3</span><span class="p">]</span>
+    <span class="n">sun</span> <span class="o">=</span> <span class="n">psr</span><span class="o">.</span><span class="n">sunssb</span><span class="p">[:,</span> <span class="p">:</span><span class="mi">3</span><span class="p">]</span>
+    <span class="n">earthsun</span> <span class="o">=</span> <span class="n">earth</span> <span class="o">-</span> <span class="n">sun</span>
 
-    <span class="k">def</span><span class="w"> </span><span class="nf">logprior</span><span class="p">(</span><span class="n">params</span><span class="p">):</span>
-        <span class="k">return</span> <span class="nb">sum</span><span class="p">(</span><span class="n">prior</span><span class="p">(</span><span class="n">params</span><span class="p">)</span> <span class="k">for</span> <span class="n">prior</span> <span class="ow">in</span> <span class="n">priors</span><span class="p">)</span>
+    <span class="n">R_earth</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">einsum</span><span class="p">(</span><span class="s1">&#39;ij,ij-&gt;i&#39;</span><span class="p">,</span> <span class="n">earthsun</span><span class="p">,</span> <span class="n">earthsun</span><span class="p">))</span>
+    <span class="n">Re_cos_theta_impact</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">einsum</span><span class="p">(</span><span class="s1">&#39;ij,ij-&gt;i&#39;</span><span class="p">,</span> <span class="n">earthsun</span><span class="p">,</span> <span class="n">psr</span><span class="o">.</span><span class="n">pos_t</span><span class="p">)</span>
 
-    <span class="k">return</span> <span class="n">logprior</span></div>
+    <span class="n">theta_impact</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arccos</span><span class="p">(</span><span class="o">-</span><span class="n">Re_cos_theta_impact</span> <span class="o">/</span> <span class="n">R_earth</span><span class="p">)</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">R_earth</span><span class="o">**</span><span class="mi">2</span> <span class="o">-</span> <span class="n">Re_cos_theta_impact</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
 
-
-
-<div class="viewcode-block" id="makelogtransform_uniform">
-<a class="viewcode-back" href="../../api/prior.html#discovery.prior.makelogtransform_uniform">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">makelogtransform_uniform</span><span class="p">(</span><span class="n">func</span><span class="p">,</span> <span class="n">priordict</span><span class="o">=</span><span class="p">{}):</span>
-    <span class="n">priordict</span> <span class="o">=</span> <span class="p">{</span><span class="o">**</span><span class="n">priordict_standard</span><span class="p">,</span> <span class="o">**</span><span class="n">priordict</span><span class="p">}</span>
-
-    <span class="c1"># figure out slices when there are vector arguments</span>
-    <span class="n">slices</span><span class="p">,</span> <span class="n">offset</span> <span class="o">=</span> <span class="p">[],</span> <span class="mi">0</span>
-    <span class="k">for</span> <span class="n">par</span> <span class="ow">in</span> <span class="n">func</span><span class="o">.</span><span class="n">params</span><span class="p">:</span>
-        <span class="k">if</span> <span class="s1">&#39;(&#39;</span> <span class="ow">in</span> <span class="n">par</span><span class="p">:</span>
-            <span class="n">l</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">par</span><span class="p">[</span><span class="n">par</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="s1">&#39;(&#39;</span><span class="p">)</span><span class="o">+</span><span class="mi">1</span><span class="p">:</span><span class="n">par</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="s1">&#39;)&#39;</span><span class="p">)])</span> <span class="k">if</span> <span class="s1">&#39;(&#39;</span> <span class="ow">in</span> <span class="n">par</span> <span class="k">else</span> <span class="mi">1</span>
-            <span class="n">slices</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">slice</span><span class="p">(</span><span class="n">offset</span><span class="p">,</span> <span class="n">offset</span><span class="o">+</span><span class="n">l</span><span class="p">))</span>
-            <span class="n">offset</span> <span class="o">=</span> <span class="n">offset</span> <span class="o">+</span> <span class="n">l</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="n">slices</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">offset</span><span class="p">)</span>
-            <span class="n">offset</span> <span class="o">=</span> <span class="n">offset</span> <span class="o">+</span> <span class="mi">1</span>
-
-    <span class="c1"># build vectors of DF column names and of lower and upper uniform limits</span>
-    <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="p">[],</span> <span class="p">[]</span>
-    <span class="n">columns</span> <span class="o">=</span> <span class="p">[]</span>
-    <span class="k">for</span> <span class="n">par</span><span class="p">,</span> <span class="n">slice_</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">func</span><span class="o">.</span><span class="n">params</span><span class="p">,</span> <span class="n">slices</span><span class="p">):</span>
-        <span class="k">for</span> <span class="n">pname</span><span class="p">,</span> <span class="n">prange</span> <span class="ow">in</span> <span class="n">priordict</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-            <span class="k">if</span> <span class="n">re</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">pname</span><span class="p">,</span> <span class="n">par</span><span class="p">):</span>
-                <span class="n">therange</span> <span class="o">=</span> <span class="n">prange</span>
-                <span class="k">break</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">KeyError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;No known prior for </span><span class="si">{</span><span class="n">par</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
-
-        <span class="k">if</span> <span class="s1">&#39;(&#39;</span> <span class="ow">in</span> <span class="n">par</span><span class="p">:</span>
-            <span class="n">root</span> <span class="o">=</span> <span class="n">par</span><span class="p">[:</span><span class="n">par</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="s1">&#39;(&#39;</span><span class="p">)]</span>
-            <span class="n">l</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">par</span><span class="p">[</span><span class="n">par</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="s1">&#39;(&#39;</span><span class="p">)</span><span class="o">+</span><span class="mi">1</span><span class="p">:</span><span class="n">par</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="s1">&#39;)&#39;</span><span class="p">)])</span> <span class="k">if</span> <span class="s1">&#39;(&#39;</span> <span class="ow">in</span> <span class="n">par</span> <span class="k">else</span> <span class="mi">1</span>
-
-            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">l</span><span class="p">):</span>
-                <span class="n">columns</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">root</span><span class="si">}</span><span class="s1">[</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s1">]&#39;</span><span class="p">)</span>
-                <span class="n">a</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">therange</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
-                <span class="n">b</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">therange</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="n">columns</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">par</span><span class="p">)</span>
-            <span class="n">a</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">therange</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
-            <span class="n">b</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">therange</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
-
-    <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">jnparray</span><span class="p">(</span><span class="n">a</span><span class="p">),</span> <span class="n">matrix</span><span class="o">.</span><span class="n">jnparray</span><span class="p">(</span><span class="n">b</span><span class="p">)</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">to_dict</span><span class="p">(</span><span class="n">ys</span><span class="p">):</span>
-        <span class="n">xs</span> <span class="o">=</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">b</span> <span class="o">+</span> <span class="n">a</span> <span class="o">+</span> <span class="p">(</span><span class="n">b</span> <span class="o">-</span> <span class="n">a</span><span class="p">)</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">tanh</span><span class="p">(</span><span class="n">ys</span><span class="p">))</span>
-
-        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">a</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">func</span><span class="o">.</span><span class="n">params</span><span class="p">):</span>
-            <span class="k">return</span> <span class="p">{</span><span class="n">par</span><span class="p">:</span> <span class="n">xs</span><span class="p">[</span><span class="n">slice_</span><span class="p">]</span> <span class="k">for</span> <span class="n">par</span><span class="p">,</span> <span class="n">slice_</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">func</span><span class="o">.</span><span class="n">params</span><span class="p">,</span> <span class="n">slices</span><span class="p">)}</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">return</span> <span class="nb">dict</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">func</span><span class="o">.</span><span class="n">params</span><span class="p">,</span> <span class="n">xs</span><span class="p">))</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">to_vec</span><span class="p">(</span><span class="n">params</span><span class="p">):</span>
-        <span class="n">xs</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
-        <span class="k">for</span> <span class="n">par</span><span class="p">,</span> <span class="n">slice_</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">func</span><span class="o">.</span><span class="n">params</span><span class="p">,</span> <span class="n">slices</span><span class="p">):</span>
-            <span class="n">xs</span> <span class="o">=</span> <span class="n">xs</span><span class="o">.</span><span class="n">at</span><span class="p">[</span><span class="n">slice_</span><span class="p">]</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="n">par</span><span class="p">])</span>
-
-        <span class="c1"># only Python 3.11: xs = jnp.r_[*[params[pname] for pname in func.params]]</span>
-        <span class="c1"># only scalar parameters: xs = matrix.jnparray([params[pname] for pname in func.params])</span>
-
-        <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">arctanh</span><span class="p">((</span><span class="n">a</span> <span class="o">+</span> <span class="n">b</span> <span class="o">-</span> <span class="mi">2</span><span class="o">*</span><span class="n">xs</span><span class="p">)</span><span class="o">/</span><span class="p">(</span><span class="n">a</span> <span class="o">-</span> <span class="n">b</span><span class="p">))</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">to_df</span><span class="p">(</span><span class="n">ys</span><span class="p">,</span> <span class="n">psrs</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
-        <span class="n">xs</span> <span class="o">=</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">b</span> <span class="o">+</span> <span class="n">a</span> <span class="o">+</span> <span class="p">(</span><span class="n">b</span> <span class="o">-</span> <span class="n">a</span><span class="p">)</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">tanh</span><span class="p">(</span><span class="n">ys</span><span class="p">))</span>
-
-        <span class="k">if</span> <span class="n">psrs</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">xs</span><span class="p">),</span> <span class="n">columns</span><span class="o">=</span><span class="n">columns</span><span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="c1"># rename columns from psr number to psr name</span>
-            <span class="n">psrdict</span> <span class="o">=</span> <span class="p">{</span><span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s1">]&#39;</span><span class="p">:</span> <span class="n">psr</span><span class="o">.</span><span class="n">name</span> <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">psr</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">psrs</span><span class="p">)}</span>
-            <span class="n">psrcols</span> <span class="o">=</span> <span class="p">[</span><span class="n">psrdict</span><span class="p">[</span><span class="n">par</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;[&#39;</span><span class="p">)[</span><span class="mi">1</span><span class="p">]]</span> <span class="o">+</span> <span class="s1">&#39;_&#39;</span> <span class="o">+</span> <span class="n">par</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;[&#39;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span> <span class="k">if</span> <span class="s1">&#39;[&#39;</span> <span class="ow">in</span> <span class="n">par</span> <span class="k">else</span> <span class="n">par</span> <span class="k">for</span> <span class="n">par</span> <span class="ow">in</span> <span class="n">columns</span><span class="p">]</span>
-            <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">xs</span><span class="p">),</span> <span class="n">columns</span><span class="o">=</span><span class="n">psrcols</span><span class="p">)</span><span class="o">.</span><span class="n">sort_index</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">logprior</span><span class="p">(</span><span class="n">ys</span><span class="p">):</span>
-        <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="mf">2.0</span><span class="p">)</span> <span class="o">-</span> <span class="mf">2.0</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">logaddexp</span><span class="p">(</span><span class="n">ys</span><span class="p">,</span> <span class="o">-</span><span class="n">ys</span><span class="p">))</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">logL</span><span class="p">(</span><span class="n">ys</span><span class="p">):</span>
-        <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="n">to_dict</span><span class="p">(</span><span class="n">ys</span><span class="p">))</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">transformed</span><span class="p">(</span><span class="n">ys</span><span class="p">):</span>
-        <span class="k">return</span> <span class="n">logL</span><span class="p">(</span><span class="n">ys</span><span class="p">)</span> <span class="o">+</span> <span class="n">logprior</span><span class="p">(</span><span class="n">ys</span><span class="p">)</span>
-
-    <span class="n">transformed</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="n">func</span><span class="o">.</span><span class="n">params</span>
-
-    <span class="n">transformed</span><span class="o">.</span><span class="n">logprior</span> <span class="o">=</span> <span class="n">logprior</span>
-    <span class="n">transformed</span><span class="o">.</span><span class="n">logL</span> <span class="o">=</span> <span class="n">logL</span>
-
-    <span class="n">transformed</span><span class="o">.</span><span class="n">to_dict</span> <span class="o">=</span> <span class="n">to_dict</span>
-    <span class="n">transformed</span><span class="o">.</span><span class="n">to_vec</span> <span class="o">=</span> <span class="n">to_vec</span>
-    <span class="n">transformed</span><span class="o">.</span><span class="n">to_df</span> <span class="o">=</span> <span class="n">to_df</span>
-
-    <span class="k">return</span> <span class="n">transformed</span></div>
+    <span class="k">return</span> <span class="n">theta_impact</span><span class="p">,</span> <span class="n">R_earth</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="o">-</span><span class="n">Re_cos_theta_impact</span></div>
 
 
+<div class="viewcode-block" id="make_solardm">
+<a class="viewcode-back" href="../../api/solar.html#discovery.solar.make_solardm">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">make_solardm</span><span class="p">(</span><span class="n">psr</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;From enterprise_extensions: calculate DM</span>
+<span class="sd">    due to 1/r^2 solar wind density model.&quot;&quot;&quot;</span>
 
-<div class="viewcode-block" id="makelogtransform_classic">
-<a class="viewcode-back" href="../../api/prior.html#discovery.prior.makelogtransform_classic">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">makelogtransform_classic</span><span class="p">(</span><span class="n">func</span><span class="p">,</span> <span class="n">priordict</span><span class="o">=</span><span class="p">{}):</span>
-    <span class="n">priordict</span> <span class="o">=</span> <span class="p">{</span><span class="o">**</span><span class="n">priordict_standard</span><span class="p">,</span> <span class="o">**</span><span class="n">priordict</span><span class="p">}</span>
+    <span class="n">theta</span><span class="p">,</span> <span class="n">r_earth</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">theta_impact</span><span class="p">(</span><span class="n">psr</span><span class="p">)</span>
+    <span class="n">shape</span> <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">jnparray</span><span class="p">(</span><span class="n">AU_light_sec</span> <span class="o">*</span> <span class="n">AU_pc</span> <span class="o">/</span> <span class="n">r_earth</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">sinc</span><span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">theta</span><span class="o">/</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">)</span> <span class="o">*</span> <span class="mf">4.148808e3</span> <span class="o">/</span> <span class="n">psr</span><span class="o">.</span><span class="n">freqs</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
 
-    <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="p">[],</span> <span class="p">[]</span>
-    <span class="k">for</span> <span class="n">par</span> <span class="ow">in</span> <span class="n">func</span><span class="o">.</span><span class="n">params</span><span class="p">:</span>
-        <span class="k">for</span> <span class="n">pname</span><span class="p">,</span> <span class="n">prange</span> <span class="ow">in</span> <span class="n">priordict</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-            <span class="k">if</span> <span class="n">re</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">pname</span><span class="p">,</span> <span class="n">par</span><span class="p">):</span>
-                <span class="n">a</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">prange</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
-                <span class="n">b</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">prange</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
-                <span class="k">break</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">KeyError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;No known prior for </span><span class="si">{</span><span class="n">par</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">solardm</span><span class="p">(</span><span class="n">n_earth</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">n_earth</span> <span class="o">*</span> <span class="n">shape</span>
 
-    <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">jnparray</span><span class="p">(</span><span class="n">a</span><span class="p">),</span> <span class="n">matrix</span><span class="o">.</span><span class="n">jnparray</span><span class="p">(</span><span class="n">b</span><span class="p">)</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">to_dict</span><span class="p">(</span><span class="n">ys</span><span class="p">):</span>
-        <span class="n">xs</span> <span class="o">=</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">b</span> <span class="o">+</span> <span class="n">a</span> <span class="o">+</span> <span class="p">(</span><span class="n">b</span> <span class="o">-</span> <span class="n">a</span><span class="p">)</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">tanh</span><span class="p">(</span><span class="n">ys</span><span class="p">))</span>
-        <span class="k">return</span> <span class="nb">dict</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">func</span><span class="o">.</span><span class="n">params</span><span class="p">,</span> <span class="n">xs</span><span class="p">))</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">to_vec</span><span class="p">(</span><span class="n">params</span><span class="p">):</span>
-        <span class="n">xs</span> <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">jnparray</span><span class="p">([</span><span class="n">params</span><span class="p">[</span><span class="n">pname</span><span class="p">]</span> <span class="k">for</span> <span class="n">pname</span> <span class="ow">in</span> <span class="n">func</span><span class="o">.</span><span class="n">params</span><span class="p">])</span>
-        <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">arctanh</span><span class="p">((</span><span class="n">a</span> <span class="o">+</span> <span class="n">b</span> <span class="o">-</span> <span class="mi">2</span><span class="o">*</span><span class="n">xs</span><span class="p">)</span><span class="o">/</span><span class="p">(</span><span class="n">a</span> <span class="o">-</span> <span class="n">b</span><span class="p">))</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">to_df</span><span class="p">(</span><span class="n">ys</span><span class="p">):</span>
-        <span class="n">xs</span> <span class="o">=</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">b</span> <span class="o">+</span> <span class="n">a</span> <span class="o">+</span> <span class="p">(</span><span class="n">b</span> <span class="o">-</span> <span class="n">a</span><span class="p">)</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">tanh</span><span class="p">(</span><span class="n">ys</span><span class="p">))</span>
-        <span class="k">return</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">xs</span><span class="p">),</span> <span class="n">columns</span><span class="o">=</span><span class="n">func</span><span class="o">.</span><span class="n">params</span><span class="p">)</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">logprior</span><span class="p">(</span><span class="n">ys</span><span class="p">):</span>
-        <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="mf">2.0</span><span class="p">)</span> <span class="o">-</span> <span class="mf">2.0</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">logaddexp</span><span class="p">(</span><span class="n">ys</span><span class="p">,</span> <span class="o">-</span><span class="n">ys</span><span class="p">))</span>
-
-        <span class="c1"># return jnp.sum(jnp.log(0.5) - 2.0 * jnp.log(jnp.cosh(ys)))</span>
-        <span class="c1"># but   log(0.5) - 2 * log(cosh(y))</span>
-        <span class="c1">#     = log(0.5) - 2 * log((exp(x) + exp(-x))/2)</span>
-        <span class="c1">#     = log(0.5) - 2 * (log(exp(x) - exp(-x)) - log(2.0))</span>
-        <span class="c1">#     = log(2.0) - 2 * logaddexp(x, -x)</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">logL</span><span class="p">(</span><span class="n">ys</span><span class="p">):</span>
-        <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="n">to_dict</span><span class="p">(</span><span class="n">ys</span><span class="p">))</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">transformed</span><span class="p">(</span><span class="n">ys</span><span class="p">):</span>
-        <span class="k">return</span> <span class="n">logL</span><span class="p">(</span><span class="n">ys</span><span class="p">)</span> <span class="o">+</span> <span class="n">logprior</span><span class="p">(</span><span class="n">ys</span><span class="p">)</span>
-
-    <span class="n">transformed</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="n">func</span><span class="o">.</span><span class="n">params</span>
-
-    <span class="n">transformed</span><span class="o">.</span><span class="n">logprior</span> <span class="o">=</span> <span class="n">logprior</span>
-    <span class="n">transformed</span><span class="o">.</span><span class="n">logL</span> <span class="o">=</span> <span class="n">logL</span>
-
-    <span class="n">transformed</span><span class="o">.</span><span class="n">to_dict</span> <span class="o">=</span> <span class="n">to_dict</span>
-    <span class="n">transformed</span><span class="o">.</span><span class="n">to_vec</span> <span class="o">=</span> <span class="n">to_vec</span>
-    <span class="n">transformed</span><span class="o">.</span><span class="n">to_df</span> <span class="o">=</span> <span class="n">to_df</span>
-
-    <span class="k">return</span> <span class="n">transformed</span></div>
+    <span class="k">return</span> <span class="n">solardm</span></div>
 
 
+<span class="k">def</span><span class="w"> </span><span class="nf">_dm_solar_close</span><span class="p">(</span><span class="n">n_earth</span><span class="p">,</span> <span class="n">r_earth</span><span class="p">):</span>
+     <span class="k">return</span> <span class="p">(</span><span class="n">n_earth</span> <span class="o">*</span> <span class="n">AU_light_sec</span> <span class="o">*</span> <span class="n">AU_pc</span> <span class="o">/</span> <span class="n">r_earth</span><span class="p">)</span>
 
-<div class="viewcode-block" id="sample_uniform">
-<a class="viewcode-back" href="../../api/prior.html#discovery.prior.sample_uniform">[docs]</a>
-<span class="k">def</span><span class="w"> </span><span class="nf">sample_uniform</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">priordict</span><span class="o">=</span><span class="p">{},</span> <span class="n">n</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">fail</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
-    <span class="n">priordict</span> <span class="o">=</span> <span class="p">{</span><span class="o">**</span><span class="n">priordict_standard</span><span class="p">,</span> <span class="o">**</span><span class="n">priordict</span><span class="p">}</span>
 
-    <span class="n">sample</span> <span class="o">=</span> <span class="p">{}</span>
-    <span class="k">for</span> <span class="n">par</span> <span class="ow">in</span> <span class="n">params</span><span class="p">:</span>
-        <span class="k">for</span> <span class="n">parname</span><span class="p">,</span> <span class="nb">range</span> <span class="ow">in</span> <span class="n">priordict</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-            <span class="k">if</span> <span class="n">parname</span> <span class="o">==</span> <span class="n">par</span> <span class="ow">or</span> <span class="n">re</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">parname</span><span class="p">,</span> <span class="n">par</span><span class="p">):</span>
-                <span class="k">if</span> <span class="n">par</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s2">&quot;)&quot;</span><span class="p">):</span>
-                    <span class="n">sample</span><span class="p">[</span><span class="n">par</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
-                        <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="o">*</span><span class="nb">range</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">par</span><span class="p">[</span><span class="n">par</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="s2">&quot;(&quot;</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span> <span class="p">:</span> <span class="o">-</span><span class="mi">1</span><span class="p">]))</span>
-                        <span class="k">if</span> <span class="n">n</span> <span class="o">==</span> <span class="mi">1</span>
-                        <span class="k">else</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="o">*</span><span class="nb">range</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">par</span><span class="p">[</span><span class="n">par</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="s2">&quot;(&quot;</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span> <span class="p">:</span> <span class="o">-</span><span class="mi">1</span><span class="p">])))</span>
-                    <span class="p">)</span>
-                <span class="k">else</span><span class="p">:</span>
-                    <span class="n">sample</span><span class="p">[</span><span class="n">par</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="o">*</span><span class="nb">range</span><span class="p">)</span> <span class="k">if</span> <span class="n">n</span> <span class="o">==</span> <span class="mi">1</span> <span class="k">else</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="o">*</span><span class="nb">range</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="n">n</span><span class="p">)</span>
-                <span class="k">break</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">if</span> <span class="n">fail</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">KeyError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;No known prior for </span><span class="si">{</span><span class="n">par</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_dm_solar</span><span class="p">(</span><span class="n">n_earth</span><span class="p">,</span> <span class="n">theta</span><span class="p">,</span> <span class="n">r_earth</span><span class="p">):</span>
+    <span class="k">return</span> <span class="p">((</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">-</span> <span class="n">theta</span><span class="p">)</span> <span class="o">*</span>
+            <span class="p">(</span><span class="n">n_earth</span> <span class="o">*</span> <span class="n">AU_light_sec</span> <span class="o">*</span> <span class="n">AU_pc</span>
+            <span class="o">/</span> <span class="p">(</span><span class="n">r_earth</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="n">theta</span><span class="p">))))</span>
 
-    <span class="k">return</span> <span class="n">sample</span></div>
+<div class="viewcode-block" id="dm_solar">
+<a class="viewcode-back" href="../../api/solar.html#discovery.solar.dm_solar">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">dm_solar</span><span class="p">(</span><span class="n">n_earth</span><span class="p">,</span> <span class="n">theta</span><span class="p">,</span> <span class="n">r_earth</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Calculates Dispersion measure due to 1/r^2 solar wind density model.</span>
+<span class="sd">    ::param :n_earth Solar wind proton/electron density at Earth (1/cm^3)</span>
+<span class="sd">    ::param :theta: angle between sun and line-of-sight to pulsar (rad)</span>
+<span class="sd">    ::param :r_earth :distance from Earth to Sun in (light seconds).</span>
+<span class="sd">    See You et al. 2007 for more details.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">matrix</span><span class="o">.</span><span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">-</span> <span class="n">theta</span> <span class="o">&gt;=</span> <span class="mf">1e-5</span><span class="p">,</span>
+                    <span class="n">_dm_solar</span><span class="p">(</span><span class="n">n_earth</span><span class="p">,</span> <span class="n">theta</span><span class="p">,</span> <span class="n">r_earth</span><span class="p">),</span>
+                    <span class="n">_dm_solar_close</span><span class="p">(</span><span class="n">n_earth</span><span class="p">,</span> <span class="n">r_earth</span><span class="p">))</span></div>
+
+
+<div class="viewcode-block" id="fourierbasis_solar_dm">
+<a class="viewcode-back" href="../../api/solar.html#discovery.solar.fourierbasis_solar_dm">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">fourierbasis_solar_dm</span><span class="p">(</span><span class="n">psr</span><span class="p">,</span>
+                        <span class="n">components</span><span class="p">,</span>
+                        <span class="n">T</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    From enterprise_extions: construct DM-Solar Model Fourier design matrix.</span>
+
+<span class="sd">    :param psr: Pulsar object</span>
+<span class="sd">    :param components: Number of Fourier components in the model</span>
+<span class="sd">    :param T: Total timespan of the data</span>
+
+<span class="sd">    :return: F: SW DM-variation fourier design matrix</span>
+<span class="sd">    :return: f: Sampling frequencies</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="c1"># get base Fourier design matrix and frequencies</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">.</span><span class="w"> </span><span class="kn">import</span> <span class="n">signals</span>
+    <span class="n">f</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">fmat</span> <span class="o">=</span> <span class="n">signals</span><span class="o">.</span><span class="n">fourierbasis</span><span class="p">(</span><span class="n">psr</span><span class="p">,</span> <span class="n">components</span><span class="p">,</span> <span class="n">T</span><span class="p">)</span>
+    <span class="n">theta</span><span class="p">,</span> <span class="n">R_earth</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">theta_impact</span><span class="p">(</span><span class="n">psr</span><span class="p">)</span>
+    <span class="n">dm_sol_wind</span> <span class="o">=</span> <span class="n">dm_solar</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">theta</span><span class="p">,</span> <span class="n">R_earth</span><span class="p">)</span>
+    <span class="n">dt_DM</span> <span class="o">=</span> <span class="n">dm_sol_wind</span> <span class="o">*</span> <span class="mf">4.148808e3</span> <span class="o">/</span> <span class="p">(</span><span class="n">psr</span><span class="o">.</span><span class="n">freqs</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">f</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">fmat</span> <span class="o">*</span> <span class="n">dt_DM</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span></div>
+
+
+<div class="viewcode-block" id="makegp_timedomain_solar_dm">
+<a class="viewcode-back" href="../../api/solar.html#discovery.solar.makegp_timedomain_solar_dm">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">makegp_timedomain_solar_dm</span><span class="p">(</span><span class="n">psr</span><span class="p">,</span> <span class="n">covariance</span><span class="p">,</span> <span class="n">dt</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">common</span><span class="o">=</span><span class="p">[],</span> <span class="n">name</span><span class="o">=</span><span class="s1">&#39;timedomain_sw_gp&#39;</span><span class="p">):</span>
+     <span class="n">argspec</span> <span class="o">=</span> <span class="n">inspect</span><span class="o">.</span><span class="n">getfullargspec</span><span class="p">(</span><span class="n">covariance</span><span class="p">)</span>
+     <span class="n">argmap</span> <span class="o">=</span> <span class="p">[(</span><span class="n">arg</span> <span class="k">if</span> <span class="n">arg</span> <span class="ow">in</span> <span class="n">common</span> <span class="k">else</span> <span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s1">_</span><span class="si">{</span><span class="n">arg</span><span class="si">}</span><span class="s1">&#39;</span> <span class="k">if</span> <span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s1">_</span><span class="si">{</span><span class="n">arg</span><span class="si">}</span><span class="s1">&#39;</span> <span class="ow">in</span> <span class="n">common</span> <span class="k">else</span> <span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">psr</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s1">_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s1">_</span><span class="si">{</span><span class="n">arg</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">)</span>
+               <span class="k">for</span> <span class="n">arg</span> <span class="ow">in</span> <span class="n">argspec</span><span class="o">.</span><span class="n">args</span> <span class="k">if</span> <span class="n">arg</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">[</span><span class="s1">&#39;tau&#39;</span><span class="p">]]</span>
+     
+     <span class="c1"># get solar wind ingredients</span>
+     <span class="n">theta</span><span class="p">,</span> <span class="n">R_earth</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">theta_impact</span><span class="p">(</span><span class="n">psr</span><span class="p">)</span>
+     <span class="n">dm_sol_wind</span> <span class="o">=</span> <span class="n">dm_solar</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">theta</span><span class="p">,</span> <span class="n">R_earth</span><span class="p">)</span>
+     <span class="n">dt_DM</span> <span class="o">=</span> <span class="n">dm_sol_wind</span> <span class="o">*</span> <span class="mf">4.148808e3</span> <span class="o">/</span> <span class="p">(</span><span class="n">psr</span><span class="o">.</span><span class="n">freqs</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span>
+ 
+     <span class="kn">from</span><span class="w"> </span><span class="nn">.signals</span><span class="w"> </span><span class="kn">import</span> <span class="n">quantize</span>
+     <span class="n">bins</span> <span class="o">=</span> <span class="n">quantize</span><span class="p">(</span><span class="n">psr</span><span class="o">.</span><span class="n">toas</span><span class="p">,</span> <span class="n">dt</span><span class="p">)</span>
+     <span class="n">Umat</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">vstack</span><span class="p">([</span><span class="n">bins</span> <span class="o">==</span> <span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">bins</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)])</span><span class="o">.</span><span class="n">T</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s1">&#39;d&#39;</span><span class="p">)</span>
+     <span class="n">Umat</span> <span class="o">=</span> <span class="n">Umat</span> <span class="o">*</span> <span class="n">dt_DM</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span> 
+     <span class="n">toas</span> <span class="o">=</span> <span class="n">psr</span><span class="o">.</span><span class="n">toas</span> <span class="o">@</span> <span class="n">Umat</span> <span class="o">/</span> <span class="n">Umat</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+ 
+     <span class="n">get_tmat</span> <span class="o">=</span> <span class="n">covariance</span>
+     <span class="n">tau</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">toas</span><span class="p">[:,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">newaxis</span><span class="p">]</span> <span class="o">-</span> <span class="n">toas</span><span class="p">[</span><span class="n">jnp</span><span class="o">.</span><span class="n">newaxis</span><span class="p">,</span> <span class="p">:])</span>
+ 
+     <span class="k">def</span><span class="w"> </span><span class="nf">getphi</span><span class="p">(</span><span class="n">params</span><span class="p">):</span>
+         <span class="k">return</span> <span class="n">get_tmat</span><span class="p">(</span><span class="n">tau</span><span class="p">,</span> <span class="o">*</span><span class="p">[</span><span class="n">params</span><span class="p">[</span><span class="n">arg</span><span class="p">]</span> <span class="k">for</span> <span class="n">arg</span> <span class="ow">in</span> <span class="n">argmap</span><span class="p">])</span>
+     <span class="n">getphi</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="n">argmap</span>
+ 
+     <span class="k">return</span> <span class="n">matrix</span><span class="o">.</span><span class="n">VariableGP</span><span class="p">(</span><span class="n">matrix</span><span class="o">.</span><span class="n">NoiseMatrix2D_var</span><span class="p">(</span><span class="n">getphi</span><span class="p">),</span> <span class="n">Umat</span><span class="p">)</span></div>
+
 
 </pre></div>
 
