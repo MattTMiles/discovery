@@ -45,6 +45,8 @@ def update_priordict_standard_mpta():
         '(.*_)?sw_gp_gamma':        [0, 4],
         '(.*_)?band_gp_log10_A':    [-18, -11],
         '(.*_)?band_gp_gamma':      [0, 7],
+        '(.*_)?band_low_gp_log10_A':    [-18, -11],
+        '(.*_)?band_low_gp_gamma':      [0, 7],
         '(.*_)?band_low_gp_fcutoff':    [856, 1712], # MeerKAT L-band
         '(.*_)?band_gp_flow':       [856, 1712], # MeerKAT L-band
         '(.*_)?band_gp_fhigh':      [856, 1712], # MeerKAT L-band
