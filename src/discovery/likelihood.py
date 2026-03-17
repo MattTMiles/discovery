@@ -114,7 +114,7 @@ class PulsarLikelihood:
             if hasattr(gp, 'name'):
                 self.name = gp.name
 
-        self.logL.params = sorted(set(self.all_params))
+        self.logL.params = sorted(set(self.all_params + getattr(self.y, 'params', [])))
 
     # allow replacement of residuals
     def __setattr__(self, name, value):
@@ -628,6 +628,11 @@ class ArrayLikelihood:
             self.vsm = matrix.VectorWoodburyKernel_varP(Ns, commongp.F, commongp.Phi)
         self.vsm.index = getattr(commongp, 'index', None)
         self.vsm.means = getattr(commongp, 'means', None)
+        # Forward per-pulsar prior metadata for sequential (memory-efficient) computation
+        for attr in ('_per_pulsar_priors', '_per_pulsar_ns'):
+            val = getattr(commongp, attr, None)
+            if val is not None:
+                setattr(self.vsm, attr, val)
 
         if self.globalgp is None:
             loglike = self.vsm.make_kernelproduct(self.ys)

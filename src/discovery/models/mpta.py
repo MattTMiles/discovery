@@ -146,6 +146,10 @@ def gps2commongp(gps):
 
     if is_2d:
         result = matrix.VariableGP(matrix.VectorNoiseMatrix2D_var(prior), Fs)
+        # Store per-pulsar priors and column counts so VectorWoodburyKernel_varFP can
+        # process pulsars sequentially, avoiding the (npsr, nmax, nmax) batched tensor.
+        result._per_pulsar_priors = priors
+        result._per_pulsar_ns = ns
     else:
         result = matrix.VariableGP(matrix.VectorNoiseMatrix1D_var(prior), Fs)
     result._has_callable_F = has_callable

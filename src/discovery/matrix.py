@@ -2787,13 +2787,111 @@ class VectorWoodburyKernel_varFP(VariableKernel):
 
     def make_kernelproduct(self, ys):
         kmeans = getattr(self, 'means', None)
+        per_pulsar_priors = getattr(self, '_per_pulsar_priors', None)
+        per_pulsar_ns = getattr(self, '_per_pulsar_ns', None)
 
         # Wrap solvers to uniform (params, y/F) signature
         N_solve_1ds = [self._wrap_solve_1d(N) for N in self.Ns]
         N_solve_2ds = [self._wrap_solve_2d(N) for N in self.Ns]
-        P_var_inv = self.P_var.make_inv()
 
         Fs = self.Fs
+
+        if per_pulsar_priors is not None:
+            # Estimate how much memory the batched (npsr, nmax, nmax) tensors would use.
+            # Two such tensors are needed (FtNmF + Pinv), plus their Cholesky factors.
+            npsr = len(Fs)
+            nmax = max(per_pulsar_ns)
+            batched_bytes = npsr * nmax * nmax * 4 * 3  # FtNmF + Pinv + cf, float32
+            # 2 GiB threshold — below this the fast batched GPU path is used; above it
+            # the sequential per-pulsar + jax.checkpoint path avoids OOM.
+            use_sequential = batched_bytes > 2 * 1024**3
+        else:
+            use_sequential = False
+
+        if use_sequential:
+            # Memory-efficient sequential per-pulsar processing.
+            # Avoids building (npsr, nmax, nmax) batched tensors that cause OOM on large PTAs.
+            #
+            # The forward-pass fix (returning scalars per pulsar) is not enough for NUTS:
+            # JAX's AD unrolls the Python for-loop into a flat XLA program, storing all
+            # pulsars' (nmax, nmax) intermediate matrices simultaneously for the backward sweep.
+            # jax.checkpoint on each per-pulsar body tells JAX to discard those intermediates
+            # and recompute them one pulsar at a time during backprop, capping peak memory at
+            # ~O(nmax^2) regardless of npsr.
+            #
+            # Math: per-pulsar logp_i = -0.5*(ytNmy_i - ytXy_i) - 0.5*(ldN_i + ldP_i + ldA_i)
+            #   where A_i = FtNmF_i + P_inv_i, ldA_i from top-left n_i block of chol(A_i)
+            #   (padding contributions to ldP + ldA cancel exactly: log(1e-40)+log(1e40)=0)
+            priors_list = per_pulsar_priors
+            ns_list = per_pulsar_ns
+            all_prior_params = sorted(set(
+                p for pf in priors_list for p in (pf.params if hasattr(pf, 'params') else [])
+            ))
+
+            def _make_pulsar_body(F_fn, N_1d, N_2d, y_i, prior_fn, n_i, psr_idx):
+                """Factory returning a jax.checkpoint-wrapped per-pulsar logp body."""
+                is_F_callable = callable(F_fn)
+                is_y_callable = callable(y_i)
+
+                def body(params):
+                    F = F_fn(params) if is_F_callable else F_fn
+                    NmF, ldN = N_2d(params, F)
+                    FtNmF = F.T @ NmF
+
+                    y = y_i(params) if is_y_callable else y_i
+                    Nmy, _ = N_1d(params, y)
+                    ytNmy = y @ Nmy
+                    NmFty = NmF.T @ y
+
+                    P = prior_fn(params)
+                    cf_P = jsp.linalg.cho_factor(P)
+                    i1P, i2P = jnp.diag_indices(n_i)
+                    ldP = matrix_norm * jnp.sum(jnp.log(jnp.abs(cf_P[0][i1P, i2P])))
+                    Pinv = jsp.linalg.cho_solve(cf_P, jnp.eye(n_i))
+
+                    nmax = FtNmF.shape[0]
+                    A = FtNmF.at[:n_i, :n_i].add(Pinv)
+                    if n_i < nmax:
+                        pi0, pi1 = jnp.diag_indices(nmax - n_i)
+                        A = A.at[n_i + pi0, n_i + pi1].add(1e40)
+
+                    cfA = matrix_factor(A)
+                    i1A, i2A = jnp.diag_indices(n_i)
+                    ldA = matrix_norm * jnp.sum(jnp.log(jnp.abs(cfA[0][i1A, i2A])))
+
+                    ytXy = NmFty @ matrix_solve(cfA, NmFty)
+                    logp_i = -0.5 * (ytNmy - ytXy) - 0.5 * (ldN + ldP + ldA)
+
+                    if kmeans is not None:
+                        a0 = kmeans(params)[psr_idx]
+                        FtNmFa0 = FtNmF @ a0
+                        logp_i = logp_i - jnp.sum(
+                            (0.5 * FtNmFa0 - NmFty) * (a0 - matrix_solve(cfA, FtNmFa0))
+                        )
+
+                    return logp_i
+
+                return jax.checkpoint(body)
+
+            pulsar_bodies = [
+                _make_pulsar_body(Fs[i], N_solve_1ds[i], N_solve_2ds[i], ys[i],
+                                  priors_list[i], ns_list[i], i)
+                for i in range(len(Fs))
+            ]
+
+            def kernelproduct(params):
+                return sum(body(params) for body in pulsar_bodies)
+
+            F_params = sum((F.params if callable(F) else [] for F in Fs), [])
+            y_params = sum((y.params if callable(y) else [] for y in ys), [])
+            N_params = sum((s1d.params for s1d in N_solve_1ds), [])
+            params_kmeans = kmeans.params if kmeans is not None else []
+            kernelproduct.params = sorted(set(all_prior_params + F_params + y_params + N_params + params_kmeans))
+
+            return kernelproduct
+
+        # --- Batched GPU path: fast, uses (npsr, nmax, nmax) tensors ---
+        P_var_inv = self.P_var.make_inv()
 
         def kernelproduct(params):
             FtNmFs = []
