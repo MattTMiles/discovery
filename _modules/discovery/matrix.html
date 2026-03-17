@@ -3639,13 +3639,111 @@
 <a class="viewcode-back" href="../../api/matrix.html#discovery.matrix.VectorWoodburyKernel_varFP.make_kernelproduct">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">make_kernelproduct</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ys</span><span class="p">):</span>
         <span class="n">kmeans</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s1">&#39;means&#39;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="n">per_pulsar_priors</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s1">&#39;_per_pulsar_priors&#39;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="n">per_pulsar_ns</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s1">&#39;_per_pulsar_ns&#39;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
 
         <span class="c1"># Wrap solvers to uniform (params, y/F) signature</span>
         <span class="n">N_solve_1ds</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_wrap_solve_1d</span><span class="p">(</span><span class="n">N</span><span class="p">)</span> <span class="k">for</span> <span class="n">N</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">Ns</span><span class="p">]</span>
         <span class="n">N_solve_2ds</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_wrap_solve_2d</span><span class="p">(</span><span class="n">N</span><span class="p">)</span> <span class="k">for</span> <span class="n">N</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">Ns</span><span class="p">]</span>
-        <span class="n">P_var_inv</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">P_var</span><span class="o">.</span><span class="n">make_inv</span><span class="p">()</span>
 
         <span class="n">Fs</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">Fs</span>
+
+        <span class="k">if</span> <span class="n">per_pulsar_priors</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="c1"># Estimate how much memory the batched (npsr, nmax, nmax) tensors would use.</span>
+            <span class="c1"># Two such tensors are needed (FtNmF + Pinv), plus their Cholesky factors.</span>
+            <span class="n">npsr</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">Fs</span><span class="p">)</span>
+            <span class="n">nmax</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">per_pulsar_ns</span><span class="p">)</span>
+            <span class="n">batched_bytes</span> <span class="o">=</span> <span class="n">npsr</span> <span class="o">*</span> <span class="n">nmax</span> <span class="o">*</span> <span class="n">nmax</span> <span class="o">*</span> <span class="mi">4</span> <span class="o">*</span> <span class="mi">3</span>  <span class="c1"># FtNmF + Pinv + cf, float32</span>
+            <span class="c1"># 2 GiB threshold — below this the fast batched GPU path is used; above it</span>
+            <span class="c1"># the sequential per-pulsar + jax.checkpoint path avoids OOM.</span>
+            <span class="n">use_sequential</span> <span class="o">=</span> <span class="n">batched_bytes</span> <span class="o">&gt;</span> <span class="mi">2</span> <span class="o">*</span> <span class="mi">1024</span><span class="o">**</span><span class="mi">3</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">use_sequential</span> <span class="o">=</span> <span class="kc">False</span>
+
+        <span class="k">if</span> <span class="n">use_sequential</span><span class="p">:</span>
+            <span class="c1"># Memory-efficient sequential per-pulsar processing.</span>
+            <span class="c1"># Avoids building (npsr, nmax, nmax) batched tensors that cause OOM on large PTAs.</span>
+            <span class="c1">#</span>
+            <span class="c1"># The forward-pass fix (returning scalars per pulsar) is not enough for NUTS:</span>
+            <span class="c1"># JAX&#39;s AD unrolls the Python for-loop into a flat XLA program, storing all</span>
+            <span class="c1"># pulsars&#39; (nmax, nmax) intermediate matrices simultaneously for the backward sweep.</span>
+            <span class="c1"># jax.checkpoint on each per-pulsar body tells JAX to discard those intermediates</span>
+            <span class="c1"># and recompute them one pulsar at a time during backprop, capping peak memory at</span>
+            <span class="c1"># ~O(nmax^2) regardless of npsr.</span>
+            <span class="c1">#</span>
+            <span class="c1"># Math: per-pulsar logp_i = -0.5*(ytNmy_i - ytXy_i) - 0.5*(ldN_i + ldP_i + ldA_i)</span>
+            <span class="c1">#   where A_i = FtNmF_i + P_inv_i, ldA_i from top-left n_i block of chol(A_i)</span>
+            <span class="c1">#   (padding contributions to ldP + ldA cancel exactly: log(1e-40)+log(1e40)=0)</span>
+            <span class="n">priors_list</span> <span class="o">=</span> <span class="n">per_pulsar_priors</span>
+            <span class="n">ns_list</span> <span class="o">=</span> <span class="n">per_pulsar_ns</span>
+            <span class="n">all_prior_params</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span>
+                <span class="n">p</span> <span class="k">for</span> <span class="n">pf</span> <span class="ow">in</span> <span class="n">priors_list</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="p">(</span><span class="n">pf</span><span class="o">.</span><span class="n">params</span> <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">pf</span><span class="p">,</span> <span class="s1">&#39;params&#39;</span><span class="p">)</span> <span class="k">else</span> <span class="p">[])</span>
+            <span class="p">))</span>
+
+            <span class="k">def</span><span class="w"> </span><span class="nf">_make_pulsar_body</span><span class="p">(</span><span class="n">F_fn</span><span class="p">,</span> <span class="n">N_1d</span><span class="p">,</span> <span class="n">N_2d</span><span class="p">,</span> <span class="n">y_i</span><span class="p">,</span> <span class="n">prior_fn</span><span class="p">,</span> <span class="n">n_i</span><span class="p">,</span> <span class="n">psr_idx</span><span class="p">):</span>
+<span class="w">                </span><span class="sd">&quot;&quot;&quot;Factory returning a jax.checkpoint-wrapped per-pulsar logp body.&quot;&quot;&quot;</span>
+                <span class="n">is_F_callable</span> <span class="o">=</span> <span class="nb">callable</span><span class="p">(</span><span class="n">F_fn</span><span class="p">)</span>
+                <span class="n">is_y_callable</span> <span class="o">=</span> <span class="nb">callable</span><span class="p">(</span><span class="n">y_i</span><span class="p">)</span>
+
+                <span class="k">def</span><span class="w"> </span><span class="nf">body</span><span class="p">(</span><span class="n">params</span><span class="p">):</span>
+                    <span class="n">F</span> <span class="o">=</span> <span class="n">F_fn</span><span class="p">(</span><span class="n">params</span><span class="p">)</span> <span class="k">if</span> <span class="n">is_F_callable</span> <span class="k">else</span> <span class="n">F_fn</span>
+                    <span class="n">NmF</span><span class="p">,</span> <span class="n">ldN</span> <span class="o">=</span> <span class="n">N_2d</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">F</span><span class="p">)</span>
+                    <span class="n">FtNmF</span> <span class="o">=</span> <span class="n">F</span><span class="o">.</span><span class="n">T</span> <span class="o">@</span> <span class="n">NmF</span>
+
+                    <span class="n">y</span> <span class="o">=</span> <span class="n">y_i</span><span class="p">(</span><span class="n">params</span><span class="p">)</span> <span class="k">if</span> <span class="n">is_y_callable</span> <span class="k">else</span> <span class="n">y_i</span>
+                    <span class="n">Nmy</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">N_1d</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>
+                    <span class="n">ytNmy</span> <span class="o">=</span> <span class="n">y</span> <span class="o">@</span> <span class="n">Nmy</span>
+                    <span class="n">NmFty</span> <span class="o">=</span> <span class="n">NmF</span><span class="o">.</span><span class="n">T</span> <span class="o">@</span> <span class="n">y</span>
+
+                    <span class="n">P</span> <span class="o">=</span> <span class="n">prior_fn</span><span class="p">(</span><span class="n">params</span><span class="p">)</span>
+                    <span class="n">cf_P</span> <span class="o">=</span> <span class="n">jsp</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">cho_factor</span><span class="p">(</span><span class="n">P</span><span class="p">)</span>
+                    <span class="n">i1P</span><span class="p">,</span> <span class="n">i2P</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">diag_indices</span><span class="p">(</span><span class="n">n_i</span><span class="p">)</span>
+                    <span class="n">ldP</span> <span class="o">=</span> <span class="n">matrix_norm</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">cf_P</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="n">i1P</span><span class="p">,</span> <span class="n">i2P</span><span class="p">])))</span>
+                    <span class="n">Pinv</span> <span class="o">=</span> <span class="n">jsp</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">cho_solve</span><span class="p">(</span><span class="n">cf_P</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">eye</span><span class="p">(</span><span class="n">n_i</span><span class="p">))</span>
+
+                    <span class="n">nmax</span> <span class="o">=</span> <span class="n">FtNmF</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+                    <span class="n">A</span> <span class="o">=</span> <span class="n">FtNmF</span><span class="o">.</span><span class="n">at</span><span class="p">[:</span><span class="n">n_i</span><span class="p">,</span> <span class="p">:</span><span class="n">n_i</span><span class="p">]</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">Pinv</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="n">n_i</span> <span class="o">&lt;</span> <span class="n">nmax</span><span class="p">:</span>
+                        <span class="n">pi0</span><span class="p">,</span> <span class="n">pi1</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">diag_indices</span><span class="p">(</span><span class="n">nmax</span> <span class="o">-</span> <span class="n">n_i</span><span class="p">)</span>
+                        <span class="n">A</span> <span class="o">=</span> <span class="n">A</span><span class="o">.</span><span class="n">at</span><span class="p">[</span><span class="n">n_i</span> <span class="o">+</span> <span class="n">pi0</span><span class="p">,</span> <span class="n">n_i</span> <span class="o">+</span> <span class="n">pi1</span><span class="p">]</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="mf">1e40</span><span class="p">)</span>
+
+                    <span class="n">cfA</span> <span class="o">=</span> <span class="n">matrix_factor</span><span class="p">(</span><span class="n">A</span><span class="p">)</span>
+                    <span class="n">i1A</span><span class="p">,</span> <span class="n">i2A</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">diag_indices</span><span class="p">(</span><span class="n">n_i</span><span class="p">)</span>
+                    <span class="n">ldA</span> <span class="o">=</span> <span class="n">matrix_norm</span> <span class="o">*</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">cfA</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="n">i1A</span><span class="p">,</span> <span class="n">i2A</span><span class="p">])))</span>
+
+                    <span class="n">ytXy</span> <span class="o">=</span> <span class="n">NmFty</span> <span class="o">@</span> <span class="n">matrix_solve</span><span class="p">(</span><span class="n">cfA</span><span class="p">,</span> <span class="n">NmFty</span><span class="p">)</span>
+                    <span class="n">logp_i</span> <span class="o">=</span> <span class="o">-</span><span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">ytNmy</span> <span class="o">-</span> <span class="n">ytXy</span><span class="p">)</span> <span class="o">-</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">ldN</span> <span class="o">+</span> <span class="n">ldP</span> <span class="o">+</span> <span class="n">ldA</span><span class="p">)</span>
+
+                    <span class="k">if</span> <span class="n">kmeans</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                        <span class="n">a0</span> <span class="o">=</span> <span class="n">kmeans</span><span class="p">(</span><span class="n">params</span><span class="p">)[</span><span class="n">psr_idx</span><span class="p">]</span>
+                        <span class="n">FtNmFa0</span> <span class="o">=</span> <span class="n">FtNmF</span> <span class="o">@</span> <span class="n">a0</span>
+                        <span class="n">logp_i</span> <span class="o">=</span> <span class="n">logp_i</span> <span class="o">-</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span>
+                            <span class="p">(</span><span class="mf">0.5</span> <span class="o">*</span> <span class="n">FtNmFa0</span> <span class="o">-</span> <span class="n">NmFty</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="n">a0</span> <span class="o">-</span> <span class="n">matrix_solve</span><span class="p">(</span><span class="n">cfA</span><span class="p">,</span> <span class="n">FtNmFa0</span><span class="p">))</span>
+                        <span class="p">)</span>
+
+                    <span class="k">return</span> <span class="n">logp_i</span>
+
+                <span class="k">return</span> <span class="n">jax</span><span class="o">.</span><span class="n">checkpoint</span><span class="p">(</span><span class="n">body</span><span class="p">)</span>
+
+            <span class="n">pulsar_bodies</span> <span class="o">=</span> <span class="p">[</span>
+                <span class="n">_make_pulsar_body</span><span class="p">(</span><span class="n">Fs</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">N_solve_1ds</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">N_solve_2ds</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">ys</span><span class="p">[</span><span class="n">i</span><span class="p">],</span>
+                                  <span class="n">priors_list</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">ns_list</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">i</span><span class="p">)</span>
+                <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">Fs</span><span class="p">))</span>
+            <span class="p">]</span>
+
+            <span class="k">def</span><span class="w"> </span><span class="nf">kernelproduct</span><span class="p">(</span><span class="n">params</span><span class="p">):</span>
+                <span class="k">return</span> <span class="nb">sum</span><span class="p">(</span><span class="n">body</span><span class="p">(</span><span class="n">params</span><span class="p">)</span> <span class="k">for</span> <span class="n">body</span> <span class="ow">in</span> <span class="n">pulsar_bodies</span><span class="p">)</span>
+
+            <span class="n">F_params</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">((</span><span class="n">F</span><span class="o">.</span><span class="n">params</span> <span class="k">if</span> <span class="nb">callable</span><span class="p">(</span><span class="n">F</span><span class="p">)</span> <span class="k">else</span> <span class="p">[]</span> <span class="k">for</span> <span class="n">F</span> <span class="ow">in</span> <span class="n">Fs</span><span class="p">),</span> <span class="p">[])</span>
+            <span class="n">y_params</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">((</span><span class="n">y</span><span class="o">.</span><span class="n">params</span> <span class="k">if</span> <span class="nb">callable</span><span class="p">(</span><span class="n">y</span><span class="p">)</span> <span class="k">else</span> <span class="p">[]</span> <span class="k">for</span> <span class="n">y</span> <span class="ow">in</span> <span class="n">ys</span><span class="p">),</span> <span class="p">[])</span>
+            <span class="n">N_params</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">((</span><span class="n">s1d</span><span class="o">.</span><span class="n">params</span> <span class="k">for</span> <span class="n">s1d</span> <span class="ow">in</span> <span class="n">N_solve_1ds</span><span class="p">),</span> <span class="p">[])</span>
+            <span class="n">params_kmeans</span> <span class="o">=</span> <span class="n">kmeans</span><span class="o">.</span><span class="n">params</span> <span class="k">if</span> <span class="n">kmeans</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="p">[]</span>
+            <span class="n">kernelproduct</span><span class="o">.</span><span class="n">params</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">all_prior_params</span> <span class="o">+</span> <span class="n">F_params</span> <span class="o">+</span> <span class="n">y_params</span> <span class="o">+</span> <span class="n">N_params</span> <span class="o">+</span> <span class="n">params_kmeans</span><span class="p">))</span>
+
+            <span class="k">return</span> <span class="n">kernelproduct</span>
+
+        <span class="c1"># --- Batched GPU path: fast, uses (npsr, nmax, nmax) tensors ---</span>
+        <span class="n">P_var_inv</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">P_var</span><span class="o">.</span><span class="n">make_inv</span><span class="p">()</span>
 
         <span class="k">def</span><span class="w"> </span><span class="nf">kernelproduct</span><span class="p">(</span><span class="n">params</span><span class="p">):</span>
             <span class="n">FtNmFs</span> <span class="o">=</span> <span class="p">[]</span>
